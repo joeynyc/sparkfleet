@@ -1,0 +1,16 @@
+# Dependencies & build output
+node_modules/
+dist/
+
+# Local machine & cluster config (contains your SSH host aliases / LAN IPs)
+sparkfleet.config.json
+.env
+.env.*
+!.env.example
+
+# Keys, certs, logs, OS artifacts
+*.pem
+*.key
+*.log
+.DS_Store
+Thumbs.db
