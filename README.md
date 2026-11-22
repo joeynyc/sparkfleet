@@ -4,6 +4,8 @@ A localhost dashboard and control plane for a pair of **NVIDIA DGX Spark** nodes
 
 Nothing is installed on the nodes. SparkFleet streams a small Python agent to each one over SSH and serves a Bun + React dashboard on `127.0.0.1:7700`.
 
+![SparkFleet tour: fleet deck, workloads, comparison charts and terminals](docs/assets/demo.gif)
+
 ## Features
 
 - **Live GPU telemetry at 1 Hz:** utilization, clock, power draw, thermal-limit margin, per-sensor temperatures, fan speed and the processes holding GPU memory.
@@ -16,6 +18,18 @@ Nothing is installed on the nodes. SparkFleet streams a small Python agent to ea
 - **Parallel commands and terminals:** run one command on both nodes with timed output, or work in two interactive SSH terminals and send a line to both at once.
 
 Network interfaces and the root disk are detected on each node: the interface with the default route is treated as the LAN, and other wired interfaces with an address are treated as fabric links.
+
+## Screenshots
+
+| Fleet deck | Workloads |
+|---|---|
+| ![Fleet deck with alerts, cluster totals, fabric links and both node cards](docs/assets/fleet-deck.png) | ![Container table with the log viewer open](docs/assets/workloads.png) |
+
+| Comparison charts | Commands and terminals |
+|---|---|
+| ![Rolling charts comparing both nodes](docs/assets/oscilloscopes.png) | ![Parallel command output above two SSH terminals](docs/assets/terminals.png) |
+
+The images show synthetic demo data, not a real cluster.
 
 ## Requirements
 
