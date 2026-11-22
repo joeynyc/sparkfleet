@@ -175,4 +175,4 @@ SparkFleet keeps one SSH connection open per Spark while it runs (control socket
 
 ## License
 
-MIT
+[Apache License 2.0](LICENSE). You can use, change and share SparkFleet freely, including commercially; keep the license and notice files with any copy you pass on.

@@ -2,7 +2,7 @@
   "name": "sparkfleet",
   "version": "1.0.0",
   "description": "Localhost dashboard and control plane for one to eight NVIDIA DGX Spark nodes",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "scripts": {
