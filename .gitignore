@@ -3,7 +3,7 @@ node_modules/
 dist/
 __pycache__/
 
-# Local machine & cluster config (contains your SSH host aliases / LAN IPs)
+# Local cluster config (holds your SSH host aliases)
 sparkfleet.config.json
 .env
 .env.*

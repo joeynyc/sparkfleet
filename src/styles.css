@@ -518,7 +518,7 @@ body {
   margin-right: 5px;
 }
 
-/* 20-core Grace CPU Matrix */
+/* Per-core CPU matrix */
 .core-matrix {
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));

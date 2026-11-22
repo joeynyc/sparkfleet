@@ -19,9 +19,9 @@ Network interfaces and the root disk are detected on each node: the interface wi
 
 ## Requirements
 
-- [Bun](https://bun.sh) 1.3+ on the workstation (macOS or Linux)
+- [Bun](https://bun.sh) 1.3+ on the workstation (macOS or Linux), along with `ssh` and `ping`
 - Key-based SSH access to both nodes, each already present in `known_hosts` (connect once by hand first)
-- `python3`, `nvidia-smi` and `docker` on the nodes; all three ship with DGX OS
+- On the nodes: `python3`, `nvidia-smi`, `docker`, `bash` and the usual Linux tools (`timeout`, `ip`, `ss`, `ps`). All of them ship with DGX OS
 
 ## Quick start
 
@@ -82,7 +82,7 @@ The server can run arbitrary commands on your cluster, so it treats every reques
 - **Origin and Host allowlist.** Requests whose `Origin` or `Host` is not this server are refused, which blocks other websites in your browser (CSRF, cross-site WebSocket hijacking) and DNS rebinding. No CORS headers are sent.
 - **Verified SSH host keys.** Connections use your `known_hosts`; an unknown or changed key fails instead of being accepted.
 - **No stored credentials.** Authentication is delegated to your local `ssh` and `~/.ssh/config`.
-- **Bounded execution.** Command output is capped at 256 KB per stream, with at most 4 concurrent commands per node and 8 open terminals.
+- **Bounded execution.** Commands are stopped on the node after a time limit (30 seconds for ad-hoc commands, less for built-in actions). Output is capped at 256 KB per stream, with at most 4 concurrent commands per node and 8 open terminals.
 - **Redacted process arguments.** Values of flags and variables that look like credentials are masked before process lists reach the browser.
 - **No third-party requests.** Fonts and scripts are served locally under a restrictive Content-Security-Policy.
 
