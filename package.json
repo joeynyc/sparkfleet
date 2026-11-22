@@ -10,6 +10,7 @@
     "dev:web": "vite",
     "build": "vite build",
     "start": "bun run build && bun server/index.ts",
+    "demo": "bun run build && PATH=\"$PWD/demo/bin:$PATH\" SPARKFLEET_CONFIG=demo/fleet.json bun --preload ./demo/preload.ts server/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
     "test": "bun test",

@@ -598,10 +598,118 @@ body {
   font-size: 11px;
 }
 
-/* Fabric inventory & directed peer probes */
+/* Fabric links, interface inventory & directed peer probes */
 .fabric-panel {
   background: linear-gradient(180deg, rgba(14, 17, 22, 0.98), rgba(9, 12, 17, 0.98));
   border: 1px solid var(--border-hair);
+}
+
+.fabric-subhead {
+  border-top: 1px solid var(--border-hair);
+}
+
+.fabric-lane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-recess);
+  border: 1px solid var(--border-hair);
+  color: var(--fg-secondary);
+  font: 11px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.fabric-lane strong {
+  color: var(--fg-primary);
+}
+
+.lane-row,
+.lane-end,
+.lane-probe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  overflow-wrap: anywhere;
+}
+
+.lane-row {
+  justify-content: space-between;
+  column-gap: 14px;
+}
+
+.lane-end strong {
+  font-size: 13px;
+}
+
+.lane-fault {
+  color: #fca5a5;
+}
+
+.link-state[data-state="ACTIVE"] {
+  color: #bef264;
+}
+
+.link-state[data-state="DEGRADED"] {
+  color: var(--amber);
+}
+
+.link-state[data-state="DOWN"] {
+  color: var(--crimson);
+}
+
+.link-state[data-state="UNPAIRED"] {
+  color: var(--fg-muted);
+}
+
+.lane-track {
+  position: relative;
+  height: 8px;
+  background: #131922;
+  border: 1px solid var(--border-hair);
+  overflow: hidden;
+}
+
+/* Dashes run from the first end's accent to the second's; still and dim until traffic flows. */
+.lane-flow {
+  position: absolute;
+  inset: 0;
+  opacity: 0.22;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0px,
+    transparent 14px,
+    color-mix(in srgb, var(--lane-from, var(--spark0)) 60%, transparent) 14px,
+    color-mix(in srgb, var(--lane-to, var(--spark1)) 80%, transparent) 26px,
+    transparent 26px,
+    transparent 42px
+  );
+  background-size: 84px 100%;
+}
+
+.lane-flow.flowing {
+  opacity: 0.95;
+  animation: flowRight 1.6s linear infinite;
+}
+
+@keyframes flowRight {
+  from { background-position: 0 0; }
+  to { background-position: 84px 0; }
+}
+
+.lane-ends {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lane-ends li {
+  padding-top: 4px;
+  border-top: 1px solid var(--border-hair);
 }
 
 .fabric-inventory {
@@ -876,7 +984,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pulse-dot, .spin {
+  .pulse-dot, .spin, .lane-flow.flowing {
     animation: none;
   }
 }

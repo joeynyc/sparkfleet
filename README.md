@@ -11,27 +11,36 @@ Nothing is installed on the nodes. SparkFleet streams a small Python agent to ea
 - **Live GPU telemetry at 1 Hz:** utilization, clock, power draw, thermal-limit margin, per-sensor temperatures, fan speed and the processes holding GPU memory.
 - **Unified memory breakdown:** GPU allocations, host processes, page cache and swap per node.
 - **Per-core CPU matrix** with frequency and I/O wait.
-- **Network interfaces and peer latency:** see RX/TX rates, byte counters, link state and speed per interface. Select a source and target to measure latency over the LAN and any matching fabric subnets.
+- **Fabric links and peer latency:** interfaces on different nodes that share a subnet are shown as one link, with throughput in each direction, state, speed and cumulative bytes. Probe a link, or pick any source and target to measure latency over every network they share. A per-node table lists each interface's own counters.
 - **Disk pressure alerts** using the same used/available figure as `df`, with a one-click breakdown of home-directory and Docker usage.
 - **Docker control:** view and filter containers by node, read logs, or start, stop and restart a selected container.
 - **Comparison charts:** compare a rolling five-minute history of GPU load, power, fabric throughput, temperature, CPU and memory across configured nodes. Offline nodes stay visible but do not contribute to live fleet totals.
 - **Commands and terminals:** run a command on selected nodes or the whole fleet. Open SSH from an individual node card, or open several panes and broadcast to those live sessions.
 
-Each node detects its own root disk, LAN (the default route), and up to two addressed wired fabric interfaces. Fabric A/B names are local to each node; the dashboard does not assume a direct cable or attribute an interface's traffic to a specific peer. A single Spark needs no fabric link. Two nodes get one initial peer probe when both are online; larger fleets probe only on request.
+Each node detects its own root disk, its LAN interface (the default route) and every other addressed wired interface, which it reports as fabric. Links are derived by matching subnets across nodes, so direct cables, rings, meshes and a shared switch all work without configuration; interface names may differ per node. An interface whose peer is not in the fleet is shown as unpaired. A single Spark needs no fabric link. Two nodes get one initial peer probe when both are online; larger fleets probe only on request.
 
 ## Screenshots
 
-![Eight simulated Sparks reporting LAN and fabric counters in the network panel](docs/assets/eight-node-fabric.webp)
+![Fleet deck for eight simulated Sparks in a ring](docs/assets/eight-node-fabric.webp)
 
 | Fleet deck | Workloads |
 |---|---|
-| ![Fleet deck with alerts, cluster totals, fabric links and both node cards](docs/assets/fleet-deck.png) | ![Container table with the log viewer open](docs/assets/workloads.png) |
+| ![Fleet deck with a disk alert, fleet totals, two fabric links and the interface table](docs/assets/fleet-deck.png) | ![Container table with the log viewer open](docs/assets/workloads.png) |
 
 | Comparison charts | Commands and terminals |
 |---|---|
-| ![Rolling charts comparing both nodes](docs/assets/oscilloscopes.png) | ![Parallel command output above two SSH terminals](docs/assets/terminals.png) |
+| ![Rolling charts comparing the nodes on one time axis](docs/assets/oscilloscopes.png) | ![Command output from each node above the SSH terminals](docs/assets/terminals.png) |
 
-All visuals use synthetic data. The network panel shows the current eight-node view; the tour and four screenshots below it show an earlier two-node layout.
+Every image comes from `bun run demo`, which uses simulated nodes, not a real cluster.
+
+## Try it without hardware
+
+```bash
+bun install
+bun run demo
+```
+
+This starts the real server on `127.0.0.1:7799` against two simulated Sparks (`demo/`): a stand-in `ssh` that never opens a connection and answers with synthetic telemetry, logs and terminal output. Open the access link it prints. Set `FAKE_FLEET_SIZE` (1 to 8) and `FAKE_TOPOLOGY` (`ring`, `mesh` or `switch`) with a matching config file to simulate other fleets.
 
 ## Requirements
 
@@ -92,9 +101,12 @@ All visuals use synthetic data. The network panel shows the current eight-node v
 bun run dev       # control plane on http://127.0.0.1:7700, restarts on change
 bun run dev:web   # Vite dev server on http://127.0.0.1:5173, proxying to :7700
 bun run check     # typecheck, lint and tests
+bun run demo      # the dashboard against simulated nodes, no hardware needed
 ```
 
 Open the access link from `bun run dev` once, then use the Vite URL; both share the session cookie. Set `SPARKFLEET_TOKEN` while developing so restarts do not invalidate it.
+
+`bun test` includes an integration test that starts the server against simulated fleets of one, four and eight nodes.
 
 The agent lives in `server/agent.py` and uses only the Python standard library. To see what a node reports:
 

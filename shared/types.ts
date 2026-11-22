@@ -17,7 +17,8 @@ export interface GpuProcess {
   cmdline: string;
 }
 
-export type InterfaceRole = "lan" | "fabric-a" | "fabric-b";
+/** A node has one LAN interface (its default route) and any number of fabric interfaces. */
+export type InterfaceRole = "lan" | "fabric";
 
 export interface NetworkInterfaceMetric {
   name: string;
@@ -125,12 +126,14 @@ export interface NodeSnapshot extends NodeTelemetry {
 }
 
 export interface HistoryPoint {
+  /** When the control plane received the sample, in ms since the epoch. */
+  ts: number;
   gpuUtil: number;
   gpuPowerW: number;
   gpuTempC: number;
   cpuUtil: number;
   memUsedGb: number;
-  /** Receive plus transmit across both fabric links. */
+  /** Receive plus transmit across all of the node's fabric interfaces. */
   fabricBps: number;
 }
 
@@ -143,16 +146,25 @@ export interface LocalHostSnapshot {
   cpuUsagePct: number;
 }
 
+/** One ping run from a source interface to the peer's interface on the same network. */
+export interface ProbePath {
+  kind: InterfaceRole;
+  /** The shared network for a fabric path; the source's LAN network for a LAN path. */
+  subnet: string;
+  sourceIface: string;
+  targetIface: string;
+  /** Null when no reply came back or the ping could not run. */
+  rttMs: number | null;
+  /** Null when the ping could not run. */
+  lossPct: number | null;
+}
+
+/** A directed measurement. `paths` is empty when the two nodes share no probeable network. */
 export interface FabricProbeResult {
   source: NodeId;
   target: NodeId;
   ts: number;
-  /** A/B refer to the source's fabric interfaces; peer interfaces are matched by subnet. */
-  fabricAPingMs: number | null;
-  fabricBPingMs: number | null;
-  lanPingMs: number | null;
-  fabricALossPct: number | null;
-  fabricBLossPct: number | null;
+  paths: ProbePath[];
 }
 
 export interface AlertItem {
@@ -173,9 +185,14 @@ export interface FleetStatePayload {
   alerts: AlertItem[];
 }
 
+/** Sections of a node snapshot that change rarely; a tick carries one only when it changed. */
+export type SlowNodeField = "containers" | "topProcesses" | "ports";
+
+export type NodeUpdate = Omit<NodeSnapshot, SlowNodeField> & Partial<Pick<NodeSnapshot, SlowNodeField>>;
+
 /** A one-second update: current state plus only the history points added since the last tick. */
 export interface FleetTick {
-  nodes: Record<NodeId, NodeSnapshot>;
+  nodes: Record<NodeId, NodeUpdate>;
   points: Record<NodeId, HistoryPoint[]>;
   probes: FabricProbeResult[];
   localHost: LocalHostSnapshot;

@@ -11,6 +11,8 @@ import type {
   NodeId,
   NodeSnapshot,
   NodeTelemetry,
+  NodeUpdate,
+  SlowNodeField,
 } from "../shared/types";
 import { NODES, NODE_IDS } from "./config";
 import { planProbe, probeCommand, ProbeError, probeResult } from "./fabric-probe";
@@ -25,6 +27,7 @@ const RECONNECT_DELAY_MS = 2500;
 const HOST_PING_INTERVAL_MS = 8000;
 const MAX_CONCURRENT_EXECS_PER_NODE = 4;
 const MAX_STREAM_STDERR_BYTES = 4096;
+const SLOW_FIELDS = ["containers", "topProcesses", "ports"] as const satisfies readonly SlowNodeField[];
 
 const DISK_WARN_PCT = 85;
 const DISK_CRITICAL_PCT = 95;
@@ -114,6 +117,9 @@ export class FleetCollector {
   private history = perNode<HistoryPoint[]>(() => []);
   /** Points recorded since the last tick was sent. */
   private pendingPoints = perNode<HistoryPoint[]>(() => []);
+  /** Serialized slow sections as of the latest sample, and as last carried by a tick. */
+  private slowJson = perNode<Partial<Record<SlowNodeField, string>>>(() => ({}));
+  private sentSlowJson = perNode<Partial<Record<SlowNodeField, string>>>(() => ({}));
   private activeExecs = perNode(() => 0);
   private streams = new Map<NodeId, Bun.Subprocess>();
   private timers: Timer[] = [];
@@ -154,10 +160,24 @@ export class FleetCollector {
   /**
    * Emits a tick with everything gathered since the previous one. Call before
    * sending `getPayload()` to a new client so no point is delivered twice.
+   * Every client receives every tick, so a slow section already sent is known to all.
    */
   flush(): void {
+    const nodes: Record<NodeId, NodeUpdate> = {};
+    for (const id of NODE_IDS) {
+      const snapshot = this.nodes[id];
+      const { containers, topProcesses, ports, ...update } = snapshot;
+      const sent = this.sentSlowJson[id];
+      nodes[id] = update;
+      for (const field of SLOW_FIELDS) {
+        const current = this.slowJson[id][field];
+        if (current === sent[field]) continue;
+        Object.assign(update, { [field]: snapshot[field] });
+        sent[field] = current;
+      }
+    }
     const tick: FleetTick = {
-      nodes: this.nodes,
+      nodes,
       points: this.pendingPoints,
       probes: this.probes,
       localHost: this.localHost,
@@ -239,8 +259,10 @@ export class FleetCollector {
       error: null,
     };
     this.nodes[id] = node;
+    for (const field of SLOW_FIELDS) this.slowJson[id][field] = JSON.stringify(node[field]);
 
     const point: HistoryPoint = {
+      ts: Date.now(),
       gpuUtil: node.gpu.utilPct,
       gpuPowerW: node.gpu.powerW,
       gpuTempC: node.gpu.tempC,

@@ -59,9 +59,6 @@ export function NodeCard({
           }}
         >
           No live telemetry. {node.error}
-          <button type="button" className="btn btn-sm" style={{ marginLeft: 8 }} onClick={onInspectStorage}>
-            INSPECT STORAGE
-          </button>
         </div>
       )}
     </section>

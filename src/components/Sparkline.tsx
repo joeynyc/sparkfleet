@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { HistoryPoint } from "../../shared/types";
 
 interface SparklineProps {
   values: number[];
@@ -115,16 +116,22 @@ export function Sparkline({
   );
 }
 
+/** Longest span the shared time axis covers: the five minutes of history kept per node. */
+const WINDOW_MS = 300_000;
+/** Samples arrive once a second; a longer silence is an outage and is drawn as a gap. */
+const GAP_MS = 3_000;
+
 interface ChartSeries {
   id: string;
   label: string;
   color: string;
   connected: boolean;
-  values: number[];
+  points: HistoryPoint[];
 }
 
 interface ChartProps {
   series: ChartSeries[];
+  value: (point: HistoryPoint) => number;
   max?: number;
   unit?: string;
   height?: number;
@@ -132,6 +139,7 @@ interface ChartProps {
 
 export function TelemetryChart({
   series,
+  value,
   max,
   unit = "",
   height = 148,
@@ -151,11 +159,21 @@ export function TelemetryChart({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
+    // One time axis for every series: it ends at the newest sample any node has and reaches back
+    // to the oldest, capped at the window. Older samples of a node that fell behind are clipped.
+    let end = Number.NEGATIVE_INFINITY;
+    let oldest = Number.POSITIVE_INFINITY;
+    for (const { points } of series) {
+      if (!points.length) continue;
+      oldest = Math.min(oldest, points[0].ts);
+      end = Math.max(end, points[points.length - 1].ts);
+    }
+    const start = Math.max(oldest, end - WINDOW_MS);
+    const spanMs = end - start;
+
     let peak = Math.max(1, max ?? 0);
-    let sampleCount = 0;
-    for (const { values } of series) {
-      sampleCount = Math.max(sampleCount, values.length);
-      for (const value of values) peak = Math.max(peak, value);
+    for (const { points } of series) {
+      for (const point of points) if (point.ts >= start) peak = Math.max(peak, value(point));
     }
     ctx.font = '10px "IBM Plex Mono", monospace';
     const padLeft = Math.ceil(ctx.measureText(`${peak.toFixed(1)}${unit}`).width) + 10;
@@ -185,43 +203,53 @@ export function TelemetryChart({
       );
     }
 
-    // Right-align the latest sample. Short histories must not stretch across the entire window.
-    const stepX = plotW / Math.max(1, sampleCount - 1);
-    for (const { values, color } of series) {
-      if (!values.length) continue;
-      ctx.beginPath();
-      values.forEach((v, idx) => {
-        const x = padLeft + plotW - (values.length - idx - 1) * stepX;
-        const y = padTop + (1 - Math.min(peak, Math.max(0, v)) / peak) * plotH;
-        if (values.length === 1) ctx.arc(x, y, 2, 0, Math.PI * 2);
-        else if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      if (values.length === 1) {
-        ctx.fillStyle = color;
-        ctx.fill();
-      } else {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.8;
-        ctx.stroke();
+    for (const { points, color } of series) {
+      const line = new Path2D();
+      const dots = new Path2D();
+      let prevTs = Number.NEGATIVE_INFINITY;
+      let run = 0;
+      let x = 0;
+      let y = 0;
+      // A sample with no neighbour inside GAP_MS has no line to carry it, so it gets a dot.
+      const endRun = () => {
+        if (run !== 1) return;
+        dots.moveTo(x + 2, y);
+        dots.arc(x, y, 2, 0, Math.PI * 2);
+      };
+      for (const point of points) {
+        if (point.ts < start) continue;
+        const gap = point.ts - prevTs > GAP_MS;
+        if (gap) endRun();
+        x = padLeft + (spanMs > 0 ? (point.ts - start) / spanMs : 1) * plotW;
+        y = padTop + (1 - Math.min(peak, Math.max(0, value(point))) / peak) * plotH;
+        if (gap) line.moveTo(x, y);
+        else line.lineTo(x, y);
+        run = gap ? 1 : run + 1;
+        prevTs = point.ts;
       }
+      endRun();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.8;
+      ctx.stroke(line);
+      ctx.fillStyle = color;
+      ctx.fill(dots);
     }
 
-    // Time axis hints
+    // Time axis: the span on the left, the newest sample on the right.
     ctx.textAlign = "left";
     ctx.fillStyle = "rgba(93,104,120,0.9)";
-    ctx.fillText(sampleCount ? `${sampleCount} SAMPLES` : "NO SAMPLES", padLeft, height - 4);
+    ctx.fillText(Number.isFinite(spanMs) ? `−${Math.round(spanMs / 1000)} s` : "NO SAMPLES", padLeft, height - 4);
     ctx.textAlign = "right";
-    ctx.fillText("LATEST SAMPLE", width - padRight, height - 4);
-  }, [series, max, unit, height]);
+    ctx.fillText("NOW", width - padRight, height - 4);
+  }, [series, value, max, unit, height]);
 
   return (
     <>
       <div className="legend-row chart-legend">
-        {series.map(({ id, label, color, values, connected }) => (
+        {series.map(({ id, label, color, points, connected }) => (
           <span key={id}>
             <i className="legend-dot" style={{ background: color }} />
-            {label} ({id}) · {values.length ? `${values[values.length - 1].toFixed(1)}${unit}` : "No data"}
+            {label} ({id}) · {points.length ? `${value(points[points.length - 1]).toFixed(1)}${unit}` : "No data"}
             {!connected && " · Offline"}
           </span>
         ))}

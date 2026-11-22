@@ -41,16 +41,17 @@ export function resolveRoster(input: unknown, env: Env): Record<NodeId, NodeConf
       if (typeof value !== "string" || !value.trim()) throw new Error(`nodes.${id}.${name} must be a nonempty string.`);
       return value;
     };
-    const prefix = `SPARK${slot}`;
-    const sshHost = assertSafeSshHost(field("sshHost", env[`${prefix}_HOST`] ?? row.sshHost));
+    // An empty variable is the same as an unset one.
+    const fromEnv = (name: string) => env[`SPARK${slot}_${name}`] || undefined;
+    const sshHost = assertSafeSshHost(field("sshHost", fromEnv("HOST") ?? row.sshHost));
     if (hosts.has(sshHost)) throw new Error(`Duplicate sshHost on ${id}; use one entry per Spark.`);
     hosts.add(sshHost);
     const accent = field("accent", row.accent ?? ACCENTS[slot]);
     if (!/^#[a-f\d]{6}$/i.test(accent)) throw new Error(`nodes.${id}.accent must be a six-digit hex color (#RRGGBB).`);
     nodes[id] = {
       id, sshHost, accent,
-      label: field("label", env[`${prefix}_LABEL`] ?? row.label ?? `SPARK-0${slot + 1}`),
-      role: field("role", env[`${prefix}_ROLE`] ?? row.role ?? "DGX SPARK"),
+      label: field("label", fromEnv("LABEL") ?? row.label ?? `SPARK-0${slot + 1}`),
+      role: field("role", fromEnv("ROLE") ?? row.role ?? "DGX SPARK"),
     };
   }
   return nodes;

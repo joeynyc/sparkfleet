@@ -39,3 +39,8 @@ export function tempColor(tempC: number): string {
   if (tempC >= 55) return "#76b900";
   return "#38bdf8";
 }
+
+/** Link speed as reported by the kernel, e.g. 200000 Mbps -> "200 GbE". */
+export function formatGbe(mbps: number): string {
+  return `${Number((mbps / 1000).toFixed(1))} GbE`;
+}

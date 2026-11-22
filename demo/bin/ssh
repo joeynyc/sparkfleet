@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stands in for ssh in the demo: every "node" is demo/fake-node.ts, never a real connection.
+exec bun "$(dirname "$0")/../fake-node.ts" "$@"

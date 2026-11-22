@@ -1,4 +1,4 @@
-import type { FleetStatePayload, FleetTick, HistoryPoint, NodeId } from "./types";
+import type { FleetStatePayload, FleetTick, HistoryPoint, NodeId, NodeSnapshot } from "./types";
 
 /** Rolling window kept per node: five minutes at one sample per second. */
 export const HISTORY_LIMIT = 300;
@@ -9,6 +9,11 @@ export function applyTick(
   tick: FleetTick,
   limit = HISTORY_LIMIT
 ): FleetStatePayload {
+  const nodes = {} as Record<NodeId, NodeSnapshot>;
+  for (const [id, update] of Object.entries(tick.nodes)) {
+    // Slow sections absent from the tick keep their previous value.
+    nodes[id] = { ...state.nodes[id], ...update };
+  }
   const history = {} as Record<NodeId, HistoryPoint[]>;
   for (const [id, added] of Object.entries(tick.points)) {
     const prior = state.history[id] ?? [];
@@ -16,7 +21,7 @@ export function applyTick(
     history[id] = merged.length > limit ? merged.slice(merged.length - limit) : merged;
   }
   return {
-    nodes: tick.nodes,
+    nodes,
     history,
     probes: tick.probes,
     localHost: tick.localHost,

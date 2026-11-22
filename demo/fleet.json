@@ -1,0 +1,7 @@
+{
+  "port": 7799,
+  "nodes": {
+    "spark-0": { "sshHost": "demo-spark-1" },
+    "spark-1": { "sshHost": "demo-spark-2" }
+  }
+}

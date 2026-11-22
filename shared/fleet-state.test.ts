@@ -3,6 +3,7 @@ import { applyTick } from "./fleet-state";
 import type { FleetStatePayload, FleetTick, HistoryPoint } from "./types";
 
 const point = (gpuUtil: number): HistoryPoint => ({
+  ts: 0,
   gpuUtil,
   gpuPowerW: 0,
   gpuTempC: 0,
@@ -57,6 +58,19 @@ test("a tick keeps sparse configured IDs and never adds placeholder nodes", () =
   expect(Object.keys(next.history)).toEqual(["spark-7", "spark-2"]);
   expect(utils(next.history["spark-7"])).toEqual([17, 18]);
   expect(next.history["spark-2"]).toBe(history["spark-2"]);
+});
+
+test("a tick without a node's slow sections keeps the ones already held", () => {
+  const containers = [{ id: "c1", name: "job", image: "img", state: "running", status: "Up", ports: "" }];
+  const held = { connected: true, containers, ports: [], topProcesses: [] } as unknown as FleetStatePayload["nodes"][string];
+  const state = { ...stateWith([], []), nodes: { "spark-0": held } };
+  const update = { connected: false } as FleetTick["nodes"][string];
+  const next = applyTick(state, { ...tickWith([], []), nodes: { "spark-0": update } });
+  expect(next.nodes["spark-0"].connected).toBe(false);
+  expect(next.nodes["spark-0"].containers).toBe(containers);
+
+  const replaced = applyTick(next, { ...tickWith([], []), nodes: { "spark-0": { ...update, containers: [] } } });
+  expect(replaced.nodes["spark-0"].containers).toEqual([]);
 });
 
 test("takes live sections from the tick", () => {

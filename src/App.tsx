@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import { fabricLinks } from "../shared/fabric-links";
 import type { FleetStatePayload, HistoryPoint, NodeId, NodeSnapshot } from "../shared/types";
 import { api, errorMessage } from "./api";
 import { FabricBridge } from "./components/FabricBridge";
@@ -18,7 +19,7 @@ import { NodeCard } from "./components/NodeCard";
 import { TelemetryChart } from "./components/Sparkline";
 import { WorkloadsView } from "./components/WorkloadsView";
 import { type LinkStatus, useFleet } from "./useFleet";
-import { formatBps, formatBytes } from "./utils/format";
+import { formatBps, formatBytes, formatGbe } from "./utils/format";
 
 // xterm.js is most of the bundle; fetch it only when the terminal tab opens.
 const OpsTerminalView = lazy(() => import("./components/OpsTerminalView"));
@@ -156,8 +157,12 @@ function FleetDeck({ fleet, status }: { fleet: FleetStatePayload; status: LinkSt
   const containerCount = sum((n) => n.containers.length);
   const runningContainers = sum((n) => n.containers.filter((c) => c.state === "running").length);
   const gpuProcesses = sum((n) => n.gpu.processes.length);
-  const fabricNics = online.flatMap((n) => n.interfaces.filter((nic) => nic.role !== "lan"));
-  const fabricTx = fabricNics.reduce((total, nic) => total + nic.txBps, 0);
+  const links = fabricLinks(nodes);
+  const activeLinks = links.filter((link) => link.state === "ACTIVE");
+  // An end with no peer in the fleet can never be active, so it is reported apart from the ratio.
+  const unpairedEnds = links.filter((link) => link.state === "UNPAIRED").length;
+  const fabricFlowBps = links.reduce((total, link) => total + link.flowBps, 0);
+  const activeMbps = activeLinks.reduce((total, link) => total + link.speedMbps, 0);
   const freeDiskBytes = sum((n) => n.disk.availBytes);
   const worstDiskPct = Math.max(0, ...online.map((n) => n.disk.usedPct));
   const diskAccent =
@@ -180,7 +185,11 @@ function FleetDeck({ fleet, status }: { fleet: FleetStatePayload; status: LinkSt
               key={id}
               type="button"
               className={`nav-tab ${tab === id ? "active" : ""}`}
-              onClick={() => setTab(id)}
+              onClick={() => {
+                // Arriving from the nav is not a request for one node's terminal.
+                setTerminalNodeId(undefined);
+                setTab(id);
+              }}
             >
               <Icon size={13} /> {label}
               {id === "workloads" && <span className="nav-badge">{hasData ? runningContainers : "—"}</span>}
@@ -270,9 +279,12 @@ function FleetDeck({ fleet, status }: { fleet: FleetStatePayload; status: LinkSt
           />
           <Kpi
             accent="var(--teal)"
-            label="FABRIC NIC TX"
-            value={fabricNics.length ? formatBps(fabricTx) : "No data"}
-            sub={hasData ? `SUM · ${fabricNics.length} REPORTED FABRIC NIC${fabricNics.length === 1 ? "" : "S"}` : coverage}
+            label="FABRIC FLOW"
+            tag={activeLinks.length ? formatGbe(activeMbps) : "NO LINKS"}
+            value={hasData ? formatBps(fabricFlowBps) : "No data"}
+            sub={hasData
+              ? `${activeLinks.length}/${links.length - unpairedEnds} LINKS ACTIVE${unpairedEnds ? ` · ${unpairedEnds} UNPAIRED` : ""}`
+              : coverage}
           />
           <Kpi
             accent="#a78bfa"
@@ -316,7 +328,7 @@ function FleetDeck({ fleet, status }: { fleet: FleetStatePayload; status: LinkSt
 
         {tab === "overview" && (
           <>
-            <FabricBridge nodes={nodes} probes={fleet.probes} />
+            <FabricBridge nodes={nodes} links={links} probes={fleet.probes} />
             <div className="fleet-grid">
               {nodes.map((node) => (
                 <NodeCard
@@ -353,8 +365,9 @@ function FleetDeck({ fleet, status }: { fleet: FleetStatePayload; status: LinkSt
                       label: node.label,
                       color: node.accent,
                       connected: node.connected,
-                      values: (fleet.history[node.id] ?? []).map(chart.value),
+                      points: fleet.history[node.id] ?? [],
                     }))}
+                    value={chart.value}
                     max={chart.max}
                     unit={chart.unit}
                     height={180}

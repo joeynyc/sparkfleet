@@ -1,9 +1,9 @@
 import { isIPv4 } from "node:net";
-import type { FabricProbeResult, InterfaceRole, NetworkInterfaceMetric, NodeId } from "../shared/types";
+import type { FabricProbeResult, NetworkInterfaceMetric, NodeId, ProbePath } from "../shared/types";
 
-type Endpoint = Pick<NetworkInterfaceMetric, "role" | "ip" | "subnet">;
-interface ProbePath {
-  role: InterfaceRole;
+type Endpoint = Pick<NetworkInterfaceMetric, "name" | "role" | "ip" | "subnet">;
+
+export interface PlannedPath extends Pick<ProbePath, "kind" | "subnet" | "sourceIface" | "targetIface"> {
   sourceIp: string;
   targetIp: string;
 }
@@ -19,9 +19,9 @@ function networkNumber(ip: string, prefix: number): number {
   return Math.floor(address / 2 ** (32 - prefix));
 }
 
-/** The agent reports IPv4 networks in canonical CIDR form. Do not assume role names match. */
+/** The agent reports IPv4 networks in canonical CIDR form. Interface names can differ per node. */
 function onSameFabric(a: Endpoint, b: Endpoint): boolean {
-  if ((b.role !== "fabric-a" && b.role !== "fabric-b") || !a.subnet || a.subnet !== b.subnet) return false;
+  if (b.role !== "fabric" || !a.subnet || a.subnet !== b.subnet) return false;
   const cidr = /^([^/]+)\/(\d{1,2})$/.exec(a.subnet);
   if (!cidr || !isIPv4(cidr[1])) return false;
   const prefix = Number(cidr[2]);
@@ -30,15 +30,22 @@ function onSameFabric(a: Endpoint, b: Endpoint): boolean {
   return networkNumber(a.ip, prefix) === network && networkNumber(b.ip, prefix) === network;
 }
 
-function selectProbePaths(source: readonly Endpoint[], target: readonly Endpoint[]): ProbePath[] {
-  const paths: ProbePath[] = [];
-  for (const role of ["fabric-a", "fabric-b", "lan"] as const) {
-    const from = source.find((iface) => iface.role === role && isIPv4(iface.ip));
-    if (!from) continue;
-    const to = target.find((peer) => isIPv4(peer.ip) && from.ip !== peer.ip && (
+/** Fabric paths in the source's interface order, then the LAN path. */
+function selectProbePaths(source: readonly Endpoint[], target: readonly Endpoint[]): PlannedPath[] {
+  const paths: PlannedPath[] = [];
+  const lan = source.find((iface) => iface.role === "lan" && isIPv4(iface.ip));
+  const sources = source.filter((iface) => iface.role === "fabric" && isIPv4(iface.ip));
+  if (lan) sources.push(lan);
+  for (const from of sources) {
+    const to = target.find((peer) => isIPv4(peer.ip) && peer.ip !== from.ip && (
       from.role === "lan" ? peer.role === "lan" : onSameFabric(from, peer)
     ));
-    if (to) paths.push({ role: from.role, sourceIp: from.ip, targetIp: to.ip });
+    if (!to) continue;
+    paths.push({
+      kind: from.role, subnet: from.subnet,
+      sourceIface: from.name, targetIface: to.name,
+      sourceIp: from.ip, targetIp: to.ip,
+    });
   }
   return paths;
 }
@@ -58,37 +65,29 @@ export function planProbe(
   return { source, target, paths: selectProbePaths(nodes[source].interfaces, nodes[target].interfaces) };
 }
 
-export function probeCommand(paths: readonly ProbePath[]): string {
-  return paths.map(({ role, sourceIp, targetIp }) =>
-    `echo '===${role}==='; LC_ALL=C ping -n -I ${sourceIp} -c ${role === "lan" ? 3 : 4} -i 0.2 -W 1 ${targetIp} 2>&1 || true`
+export function probeCommand(paths: readonly PlannedPath[]): string {
+  return paths.map(({ kind, sourceIp, targetIp }, n) =>
+    `echo '===${n}==='; LC_ALL=C ping -n -I ${sourceIp} -c ${kind === "lan" ? 3 : 4} -i 0.2 -W 1 ${targetIp} 2>&1 || true`
   ).join("; ");
 }
 
-/** No matching path is unmeasured (null); a completed ping with no replies reports 100% loss. */
-export function probeResult(source: NodeId, target: NodeId, paths: readonly ProbePath[], stdout: string): FabricProbeResult {
-  const result: FabricProbeResult = {
-    source, target, ts: Date.now(),
-    fabricAPingMs: null, fabricALossPct: null,
-    fabricBPingMs: null, fabricBLossPct: null,
-    lanPingMs: null,
-  };
-  for (const { role } of paths) {
-    const section = stdout.match(new RegExp(`===${role}===\\r?\\n([\\s\\S]*?)(?=\\n===|$)`))?.[1] ?? "";
+/**
+ * A path whose ping printed no summary is unmeasured (nulls) so one dead interface
+ * does not hide the others; a completed ping with no replies reports 100% loss.
+ */
+export function probeResult(source: NodeId, target: NodeId, paths: readonly PlannedPath[], stdout: string): FabricProbeResult {
+  let parsed = 0;
+  const measured = paths.map(({ kind, subnet, sourceIface, targetIface }, n): ProbePath => {
+    const section = stdout.match(new RegExp(`===${n}===\\r?\\n([\\s\\S]*?)(?=\\n===\\d+===|$)`))?.[1] ?? "";
     const loss = section.match(/([0-9.]+)% packet loss/);
     const rtt = section.match(/rtt min\/avg\/max\/mdev = [0-9.]+\/([0-9.]+)\//);
-    if (!loss || (!rtt && Number(loss[1]) < 100)) {
-      throw new ProbeError(502, `Ping failed on ${source} (${role}); no usable measurement`);
-    }
-    const avg = rtt ? Math.round(Number(rtt[1]) * 1000) / 1000 : null;
-    if (role === "fabric-a") {
-      result.fabricAPingMs = avg;
-      result.fabricALossPct = Number(loss[1]);
-    } else if (role === "fabric-b") {
-      result.fabricBPingMs = avg;
-      result.fabricBLossPct = Number(loss[1]);
-    } else {
-      result.lanPingMs = avg;
-    }
-  }
-  return result;
+    if (loss) parsed++;
+    return {
+      kind, subnet, sourceIface, targetIface,
+      rttMs: loss && rtt ? Math.round(Number(rtt[1]) * 1000) / 1000 : null,
+      lossPct: loss ? Number(loss[1]) : null,
+    };
+  });
+  if (paths.length && !parsed) throw new ProbeError(502, `Ping failed on ${source}; no usable measurement`);
+  return { source, target, ts: Date.now(), paths: measured };
 }

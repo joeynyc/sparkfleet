@@ -145,7 +145,10 @@ export default function OpsTerminalView({ nodes, initialNodeId }: OpsTerminalVie
     return nodeIds.length <= 2 ? nodeIds : [];
   });
   const [command, setCommand] = useState(DEFAULT_COMMAND);
-  const [targets, setTargets] = useState<NodeId[]>(openIds);
+  // Independent of the open panes: a command goes to the whole fleet unless a node was singled out.
+  const [targets, setTargets] = useState<NodeId[]>(() =>
+    initialNodeId !== undefined ? nodeIds.filter((id) => id === initialNodeId) : nodeIds
+  );
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<ExecResult[]>([]);
   const [execError, setExecError] = useState<string | null>(null);

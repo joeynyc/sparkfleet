@@ -25,6 +25,12 @@ test("a host override changes the destination, not file membership or presentati
   expect(() => resolveRoster(nodes, { SPARK4_HOST: "other" })).toThrow(/not in the configured nodes/);
 });
 
+test("an empty override variable falls back to the file instead of failing", () => {
+  const file = { "spark-0": { sshHost: "lab-1", label: "Bench" } };
+  const [node] = Object.values(resolveRoster(file, { SPARK0_HOST: "", SPARK0_LABEL: "", SPARK0_ROLE: "" }));
+  expect([node.sshHost, node.label, node.role]).toEqual(["lab-1", "Bench", "DGX SPARK"]);
+});
+
 test("an invalid roster fails before any SSH fan-out", () => {
   expect(() => resolveRoster(undefined, {})).toThrow(/Configure 1–8/);
   expect(() => resolveRoster({}, { SPARK1_HOST: "extra" })).toThrow();

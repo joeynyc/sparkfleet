@@ -308,9 +308,9 @@ def default_route_interface():
 def classify_interfaces():
     """Returns ([(interface, role)], addresses).
 
-    The NIC holding the default route is the LAN. Other wired NICs with an
-    address are fabric interfaces, RDMA-capable ones first. The A/B slot labels
-    are local to this node; peers can have different interfaces on the same subnet.
+    The NIC holding the default route is the LAN. Every other wired NIC with an
+    address is a fabric interface, RDMA-capable ones first, then by network
+    address. Peers can use different interface names on the same subnet.
     """
     addrs = ipv4_interfaces()
     lan = default_route_interface()
@@ -327,7 +327,7 @@ def classify_interfaces():
         )
     )
     roles = [(lan, "lan")] if lan in addrs else []
-    roles += list(zip(fabric, ("fabric-a", "fabric-b")))
+    roles += [(name, "fabric") for name in fabric]
     return roles, addrs
 
 
