@@ -1,10 +1,10 @@
-# SparkFleet
+# SparkPit
 
 A dashboard for your NVIDIA DGX Sparks that runs on your own computer. It works with **one to eight Sparks** and shows them all on one page: GPU load, memory, temperatures, disks, network links, Docker containers and a terminal for each machine.
 
-SparkFleet runs on a Mac or Linux computer and reaches each Spark over SSH. Nothing is installed on the Sparks, and it only connects to the machines you list.
+SparkPit runs on a Mac or Linux computer and reaches each Spark over SSH. Nothing is installed on the Sparks, and it only connects to the machines you list.
 
-![SparkFleet tour: fleet deck, workloads, comparison charts and terminals](docs/assets/demo.gif)
+![SparkPit tour: fleet deck, workloads, comparison charts and terminals](docs/assets/demo.gif)
 
 ## What you can do with it
 
@@ -44,7 +44,7 @@ Open the link it prints (it starts with `http://127.0.0.1:7799/auth`). The demo 
 
 - **A Mac or Linux computer** with [Bun](https://bun.sh) 1.3 or newer. It also uses the `ssh` and `ping` commands, which both systems normally include.
 - **SSH access to each Spark without typing a password.** If `ssh my-spark-1 hostname` prints the Spark's name without asking you anything, you are set. If you use NVIDIA Sync, the names it created work as they are.
-- **Nothing extra on the Sparks.** SparkFleet uses tools that ship with DGX OS (`python3`, `nvidia-smi`, `docker`, `bash`).
+- **Nothing extra on the Sparks.** SparkPit uses tools that ship with DGX OS (`python3`, `nvidia-smi`, `docker`, `bash`).
 
 ## Set it up
 
@@ -55,9 +55,9 @@ Open the link it prints (it starts with `http://127.0.0.1:7799/auth`). The demo 
 
 2. **List your Sparks.** Copy the example settings file:
    ```bash
-   cp sparkfleet.config.example.json sparkfleet.config.json
+   cp sparkpit.config.example.json sparkpit.config.json
    ```
-   Open `sparkfleet.config.json` and replace `my-spark-1` with the name you use to SSH into your Spark. That is all a single Spark needs:
+   Open `sparkpit.config.json` and replace `my-spark-1` with the name you use to SSH into your Spark. That is all a single Spark needs:
    ```json
    {
      "nodes": {
@@ -81,14 +81,14 @@ Open the link it prints (it starts with `http://127.0.0.1:7799/auth`). The demo 
    bun run start
    ```
 
-4. **Open the link it prints.** It looks like `http://127.0.0.1:7700/auth?token=...`. Opening it once unlocks the dashboard in that browser. Each time you start SparkFleet it prints a new link.
+4. **Open the link it prints.** It looks like `http://127.0.0.1:7700/auth?token=...`. Opening it once unlocks the dashboard in that browser. Each time you start SparkPit it prints a new link.
 
-To add or remove a Spark later, edit the file and start SparkFleet again. Your settings file is never uploaded: Git ignores it.
+To add or remove a Spark later, edit the file and start SparkPit again. Your settings file is never uploaded: Git ignores it.
 
 ### If a Spark shows as offline
 
-- Run `ssh -o BatchMode=yes my-spark-1 hostname` yourself. SparkFleet needs this to work without a password prompt or a "do you trust this host" question. Connecting once by hand answers that question for good.
-- Check the name in `sparkfleet.config.json` for typos. Each Spark needs its own, different name.
+- Run `ssh -o BatchMode=yes my-spark-1 hostname` yourself. SparkPit needs this to work without a password prompt or a "do you trust this host" question. Connecting once by hand answers that question for good.
+- Check the name in `sparkpit.config.json` for typos. Each Spark needs its own, different name.
 - The alert at the top of the dashboard shows the error SSH reported.
 
 ## Screenshots
@@ -113,9 +113,9 @@ Only `sshHost` is required. Everything else has a default.
 | Name shown on its card | `nodes.spark-N.label` | `SPARKN_LABEL` | `SPARK-01` to `SPARK-08` |
 | Subtitle on its card | `nodes.spark-N.role` | `SPARKN_ROLE` | `DGX SPARK` |
 | Color of its card and chart line | `nodes.spark-N.accent` (`#RRGGBB`) | | one color per Spark |
-| Port the dashboard uses | `port` | `SPARKFLEET_PORT` | `7700` |
-| Location of the settings file | | `SPARKFLEET_CONFIG` | `./sparkfleet.config.json` |
-| Keep the same access link between starts | | `SPARKFLEET_TOKEN` (24 or more characters) | a new random one each start |
+| Port the dashboard uses | `port` | `SPARKPIT_PORT` | `7700` |
+| Location of the settings file | | `SPARKPIT_CONFIG` | `./sparkpit.config.json` |
+| Keep the same access link between starts | | `SPARKPIT_TOKEN` (24 or more characters) | a new random one each start |
 
 `N` is a number from `0` to `7`, for example `SPARK0_HOST`.
 
@@ -131,7 +131,7 @@ If the settings file lists Sparks, that list decides which Sparks exist. A varia
 
 Each Spark reports its own network ports. The one it uses to reach your home or office network is its LAN port; every other wired port with an address counts as a link port.
 
-SparkFleet pairs up link ports that are on the same network (the same subnet) and shows each pair as one link. You do not describe your cabling anywhere. Port names can differ from Spark to Spark.
+SparkPit pairs up link ports that are on the same network (the same subnet) and shows each pair as one link. You do not describe your cabling anywhere. Port names can differ from Spark to Spark.
 
 - A link port with no partner among your Sparks is shown as unpaired.
 - With exactly two Sparks, latency is measured once at startup. With more, press **Probe** on a link, or choose any two Sparks under **Peer RTT**.
@@ -146,7 +146,7 @@ bun run check     # typecheck, lint and tests
 bun run demo      # the dashboard against simulated Sparks
 ```
 
-Open the access link from `bun run dev` once, then use the Vite address; both share the login. Set `SPARKFLEET_TOKEN` while developing so restarts keep the same link.
+Open the access link from `bun run dev` once, then use the Vite address; both share the login. Set `SPARKPIT_TOKEN` while developing so restarts keep the same link.
 
 The tests include one that starts the real server against simulated fleets of one, four and eight Sparks (`server/fleet.integration.test.ts`). The simulated Sparks live in `demo/`: a stand-in `ssh` command that never opens a connection.
 
@@ -158,11 +158,11 @@ ssh my-spark-1 'timeout 3 python3 -u -' < server/agent.py | tail -1 | jq
 
 ## Security
 
-SparkFleet can run commands on your Sparks, so it is locked down:
+SparkPit can run commands on your Sparks, so it is locked down:
 
 - **Only your computer can reach it.** It listens on `127.0.0.1`, never on your network.
 - **It needs the access link.** Each start creates a random token. The link stores it in an `HttpOnly`, `SameSite=Strict` cookie, and every request and WebSocket must carry it.
-- **Other websites cannot use it.** Requests whose `Origin` or `Host` is not SparkFleet itself are refused, which blocks cross-site requests, cross-site WebSocket connections and DNS rebinding. No CORS headers are sent.
+- **Other websites cannot use it.** Requests whose `Origin` or `Host` is not SparkPit itself are refused, which blocks cross-site requests, cross-site WebSocket connections and DNS rebinding. No CORS headers are sent.
 - **SSH host keys are checked.** A Spark whose key is unknown or has changed is refused, not trusted.
 - **No passwords or keys are stored.** Logging in is left to your own `ssh` and `~/.ssh/config`.
 - **Commands have limits.** A command is stopped on the Spark after a time limit (30 seconds for commands you type, less for built-in actions). Output is capped at 256 KB, with at most 4 commands at once per Spark and 8 open terminals.
@@ -171,8 +171,8 @@ SparkFleet can run commands on your Sparks, so it is locked down:
 
 Anyone who has the access link can run commands as your SSH user on every Spark you listed. Treat it like a password.
 
-SparkFleet keeps one SSH connection open per Spark while it runs (control sockets named `~/.ssh/sparkfleet-*`). They close by themselves a minute after it stops.
+SparkPit keeps one SSH connection open per Spark while it runs (control sockets named `~/.ssh/sparkpit-*`). They close by themselves a minute after it stops.
 
 ## License
 
-[Apache License 2.0](LICENSE). You can use, change and share SparkFleet freely, including commercially; keep the license and notice files with any copy you pass on.
+[Apache License 2.0](LICENSE). You can use, change and share SparkPit freely, including commercially; keep the license and notice files with any copy you pass on.

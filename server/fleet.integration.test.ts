@@ -63,16 +63,16 @@ const connectedNodes = (state: FleetStatePayload) =>
 
 /** Starts the server on a free port with `size` fake nodes and waits until all of them report. */
 async function startFleet(size: number, topology: "ring" | "mesh" | "switch"): Promise<Fleet> {
-  const stateDir = mkdtempSync(path.join(tmpdir(), "sparkfleet-fleet-"));
+  const stateDir = mkdtempSync(path.join(tmpdir(), "sparkpit-fleet-"));
   const port = freePort();
   const ids = Array.from({ length: size }, (_, i) => `spark-${i}`);
   const hosts = ids.map((_, i) => `demo-spark-${i + 1}`);
   const config = path.join(stateDir, "fleet.json");
   writeFileSync(config, JSON.stringify({ nodes: Object.fromEntries(ids.map((id, i) => [id, { sshHost: hosts[i] }])) }));
 
-  // A developer's own SPARK<n>_HOST or SPARKFLEET_* settings must not reach the server under test.
+  // A developer's own SPARK<n>_HOST or SPARKPIT_* settings must not reach the server under test.
   const inherited = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !/^(SPARK\d+_|SPARKFLEET_|FAKE_)/.test(key))
+    Object.entries(process.env).filter(([key]) => !/^(SPARK\d+_|SPARKPIT_|FAKE_)/.test(key))
   );
   const server = Bun.spawn([process.execPath, "server/index.ts"], {
     cwd: REPO,
@@ -80,9 +80,9 @@ async function startFleet(size: number, topology: "ring" | "mesh" | "switch"): P
       ...inherited,
       // demo/bin shadows ssh and ping; its ssh wrapper needs `bun` on the path.
       PATH: [path.join(REPO, "demo/bin"), path.dirname(process.execPath), process.env.PATH].join(path.delimiter),
-      SPARKFLEET_CONFIG: config,
-      SPARKFLEET_PORT: String(port),
-      SPARKFLEET_TOKEN: TOKEN,
+      SPARKPIT_CONFIG: config,
+      SPARKPIT_PORT: String(port),
+      SPARKPIT_TOKEN: TOKEN,
       FAKE_FLEET_SIZE: String(size),
       FAKE_TOPOLOGY: topology,
       FAKE_INTERVAL_MS: "200",
@@ -99,7 +99,7 @@ async function startFleet(size: number, topology: "ring" | "mesh" | "switch"): P
     rmSync(stateDir, { recursive: true, force: true });
   };
 
-  const headers = { Cookie: `sparkfleet_${port}=${TOKEN}` };
+  const headers = { Cookie: `sparkpit_${port}=${TOKEN}` };
   const fleet: Fleet = {
     ids,
     hosts,

@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-const API_PORT = Number(process.env.SPARKFLEET_PORT || 7700);
+const API_PORT = Number(process.env.SPARKPIT_PORT || 7700);
 const API_HOST = `127.0.0.1:${API_PORT}`;
 
 // The control plane only accepts its own Host and Origin, so the dev proxy

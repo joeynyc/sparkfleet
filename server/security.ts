@@ -21,13 +21,13 @@ const COOKIE_MAX_AGE_SEC = 30 * 24 * 3600;
 
 export function createAccessPolicy(port: number, pinnedToken?: string): AccessPolicy {
   if (pinnedToken !== undefined && pinnedToken.length < MIN_TOKEN_LENGTH) {
-    throw new Error(`SPARKFLEET_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
+    throw new Error(`SPARKPIT_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
   }
   const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
   return {
     token: pinnedToken ?? randomBytes(32).toString("base64url"),
     // Cookies ignore ports, so the name carries it to keep instances apart.
-    cookieName: `sparkfleet_${port}`,
+    cookieName: `sparkpit_${port}`,
     allowedHosts: new Set(hosts),
     allowedOrigins: new Set(hosts.map((h) => `http://${h}`)),
   };

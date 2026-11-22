@@ -100,15 +100,15 @@ export function App() {
   const { fleet, status } = useFleet();
   if (status === "locked") {
     return (
-      <Splash title="SPARKFLEET // LOCKED">
+      <Splash title="SPARKPIT // LOCKED">
         This browser is not authorized. Open the access link printed in the terminal where the
-        SparkFleet server is running, then reload.
+        SparkPit server is running, then reload.
       </Splash>
     );
   }
   if (!fleet) {
     return (
-      <Splash title="SPARKFLEET // CONNECTING">
+      <Splash title="SPARKPIT // CONNECTING">
         Opening SSH telemetry channels to the configured nodes...
       </Splash>
     );
@@ -174,7 +174,7 @@ function FleetDeck({ fleet, status }: { fleet: FleetStatePayload; status: LinkSt
         <div className="brand">
           <div className="brand-mark" />
           <div>
-            <div className="brand-title">SPARKFLEET</div>
+            <div className="brand-title">SPARKPIT</div>
             <div className="brand-sub">DGX SPARK FLEET COCKPIT</div>
           </div>
         </div>

@@ -3,7 +3,7 @@ import { assertSafeSshHost } from "./ssh";
 
 const ACCENTS = ["#76B900", "#38BDF8", "#FBBF24", "#C084FC", "#2DD4BF", "#FB7185", "#A5B4FC", "#FDBA74"];
 const SLOT_ID = /^spark-[0-7]$/;
-const SETUP_HINT = "Configure 1–8 SSH hosts in sparkfleet.config.json (spark-0 through spark-7), or set SPARK0_HOST to an SSH alias.";
+const SETUP_HINT = "Configure 1–8 SSH hosts in sparkpit.config.json (spark-0 through spark-7), or set SPARK0_HOST to an SSH alias.";
 
 type Env = Readonly<Record<string, string | undefined>>;
 

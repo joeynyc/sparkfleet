@@ -11,9 +11,9 @@ const DEFAULT_PORT = 7700;
 
 function loadConfigFile(): ConfigFile {
   const file = path.resolve(
-    process.env.SPARKFLEET_CONFIG ?? path.join(import.meta.dir, "../sparkfleet.config.json")
+    process.env.SPARKPIT_CONFIG ?? path.join(import.meta.dir, "../sparkpit.config.json")
   );
-  if (!process.env.SPARKFLEET_CONFIG && !fs.existsSync(file)) return {};
+  if (!process.env.SPARKPIT_CONFIG && !fs.existsSync(file)) return {};
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -29,9 +29,9 @@ function loadConfigFile(): ConfigFile {
 const fileConfig = loadConfigFile();
 
 function resolvePort(): number {
-  const port = Number(process.env.SPARKFLEET_PORT || fileConfig.port || DEFAULT_PORT);
+  const port = Number(process.env.SPARKPIT_PORT || fileConfig.port || DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid port "${process.env.SPARKFLEET_PORT || fileConfig.port}"`);
+    throw new Error(`Invalid port "${process.env.SPARKPIT_PORT || fileConfig.port}"`);
   }
   return port;
 }

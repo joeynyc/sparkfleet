@@ -1,5 +1,5 @@
 {
-  "name": "sparkfleet",
+  "name": "sparkpit",
   "version": "1.0.0",
   "description": "Localhost dashboard and control plane for one to eight NVIDIA DGX Spark nodes",
   "license": "Apache-2.0",
@@ -10,8 +10,8 @@
     "dev:web": "vite",
     "build": "vite build",
     "start": "bun run build && bun server/index.ts",
-    "demo": "bun run build && PATH=\"$PWD/demo/bin:$PATH\" SPARKFLEET_CONFIG=demo/fleet.json bun --preload ./demo/preload.ts server/index.ts",
-    "demo:8": "bun run build && PATH=\"$PWD/demo/bin:$PATH\" FAKE_FLEET_SIZE=8 SPARKFLEET_CONFIG=demo/fleet-8.json bun --preload ./demo/preload.ts server/index.ts",
+    "demo": "bun run build && PATH=\"$PWD/demo/bin:$PATH\" SPARKPIT_CONFIG=demo/fleet.json bun --preload ./demo/preload.ts server/index.ts",
+    "demo:8": "bun run build && PATH=\"$PWD/demo/bin:$PATH\" FAKE_FLEET_SIZE=8 SPARKPIT_CONFIG=demo/fleet-8.json bun --preload ./demo/preload.ts server/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
     "test": "bun test",

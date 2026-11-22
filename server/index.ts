@@ -29,7 +29,7 @@ type WsData =
       proc?: Bun.Subprocess;
     };
 
-const policy = createAccessPolicy(SERVER_PORT, process.env.SPARKFLEET_TOKEN || undefined);
+const policy = createAccessPolicy(SERVER_PORT, process.env.SPARKPIT_TOKEN || undefined);
 
 const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy": [
@@ -52,16 +52,16 @@ const SECURITY_HEADERS: Record<string, string> = {
 const DENIAL_MESSAGES: Record<AccessDenial, string> = {
   host: "Unrecognized Host header",
   origin: "Cross-origin requests are not allowed",
-  auth: "Not authorized: open the access link printed by the SparkFleet server",
+  auth: "Not authorized: open the access link printed by the SparkPit server",
 };
 
 const LOCKED_PAGE = `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>SparkFleet · locked</title></head>
+<head><meta charset="utf-8"><title>SparkPit · locked</title></head>
 <body style="background:#08090c;color:#edf2f7;font-family:ui-monospace,monospace;display:grid;place-items:center;min-height:100vh;margin:0">
 <div style="max-width:520px;padding:24px;border:1px solid rgba(255,255,255,.16)">
-<h1 style="font-size:16px;letter-spacing:.1em;color:#76b900;margin:0 0 10px">SPARKFLEET // LOCKED</h1>
-<p style="font-size:13px;line-height:1.6;color:#98a4b5;margin:0">This browser is not authorized. Open the access link printed in the terminal where the SparkFleet server is running. A new link is issued each time the server starts.</p>
+<h1 style="font-size:16px;letter-spacing:.1em;color:#76b900;margin:0 0 10px">SPARKPIT // LOCKED</h1>
+<p style="font-size:13px;line-height:1.6;color:#98a4b5;margin:0">This browser is not authorized. Open the access link printed in the terminal where the SparkPit server is running. A new link is issued each time the server starts.</p>
 </div>
 </body>
 </html>`;
@@ -202,7 +202,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 function serveStatic(url: URL): Response {
   const indexFile = path.join(DIST_DIR, "index.html");
   if (!fs.existsSync(indexFile)) {
-    return respond("SparkFleet API online. Run `bun run build` to serve the UI.", 503);
+    return respond("SparkPit API online. Run `bun run build` to serve the UI.", 503);
   }
   const candidate = path.join(DIST_DIR, url.pathname);
   const insideDist = candidate.startsWith(DIST_DIR + path.sep);
@@ -323,7 +323,7 @@ const server = Bun.serve<WsData>({
   },
 });
 
-console.log(`SparkFleet Control Plane listening on http://127.0.0.1:${server.port}`);
+console.log(`SparkPit Control Plane listening on http://127.0.0.1:${server.port}`);
 console.log("Open this link once to authorize your browser:");
 console.log(`  http://127.0.0.1:${server.port}/auth?token=${policy.token}`);
 

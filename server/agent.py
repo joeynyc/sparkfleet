@@ -1,4 +1,4 @@
-"""SparkFleet telemetry agent.
+"""SparkPit telemetry agent.
 
 Streamed to each node over SSH and run by the system python3 (stdlib only, no
 install step). Prints one JSON object per second on stdout, matching the

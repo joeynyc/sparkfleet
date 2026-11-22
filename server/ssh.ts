@@ -16,7 +16,7 @@ const SSH_OPTIONS = [
   "-o",
   "ControlMaster=auto",
   "-o",
-  "ControlPath=~/.ssh/sparkfleet-%C",
+  "ControlPath=~/.ssh/sparkpit-%C",
   "-o",
   "ControlPersist=60",
 ];
