@@ -11,6 +11,7 @@
     "build": "vite build",
     "start": "bun run build && bun server/index.ts",
     "demo": "bun run build && PATH=\"$PWD/demo/bin:$PATH\" SPARKFLEET_CONFIG=demo/fleet.json bun --preload ./demo/preload.ts server/index.ts",
+    "demo:8": "bun run build && PATH=\"$PWD/demo/bin:$PATH\" FAKE_FLEET_SIZE=8 SPARKFLEET_CONFIG=demo/fleet-8.json bun --preload ./demo/preload.ts server/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
     "test": "bun test",

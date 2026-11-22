@@ -1,0 +1,13 @@
+{
+  "port": 7799,
+  "nodes": {
+    "spark-0": { "sshHost": "demo-spark-1" },
+    "spark-1": { "sshHost": "demo-spark-2" },
+    "spark-2": { "sshHost": "demo-spark-3" },
+    "spark-3": { "sshHost": "demo-spark-4" },
+    "spark-4": { "sshHost": "demo-spark-5" },
+    "spark-5": { "sshHost": "demo-spark-6" },
+    "spark-6": { "sshHost": "demo-spark-7" },
+    "spark-7": { "sshHost": "demo-spark-8" }
+  }
+}
