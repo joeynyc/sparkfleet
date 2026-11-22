@@ -1,4 +1,5 @@
-export type NodeId = "spark-0" | "spark-1";
+/** A configured fleet key, not an SSH destination supplied by a client. */
+export type NodeId = string;
 
 export interface NodeConfig {
   id: NodeId;
@@ -142,31 +143,16 @@ export interface LocalHostSnapshot {
   cpuUsagePct: number;
 }
 
-export interface FabricLink {
-  subnet: string;
-  speedGbps: number;
-  state: "ACTIVE" | "DEGRADED" | "DOWN";
-  spark0To1Bps: number;
-  spark1To0Bps: number;
-  totalBytesTransferred: number;
-  /** Interface name on spark-0 and spark-1; empty when not detected. */
-  netdevs: [string, string];
-}
-
 export interface FabricProbeResult {
+  source: NodeId;
+  target: NodeId;
   ts: number;
+  /** A/B refer to the source's fabric interfaces; peer interfaces are matched by subnet. */
   fabricAPingMs: number | null;
   fabricBPingMs: number | null;
   lanPingMs: number | null;
   fabricALossPct: number | null;
   fabricBLossPct: number | null;
-}
-
-export interface FabricTelemetry {
-  linkA: FabricLink;
-  linkB: FabricLink;
-  combinedThroughputBps: number;
-  lastProbe: FabricProbeResult | null;
 }
 
 export interface AlertItem {
@@ -182,7 +168,7 @@ export interface AlertItem {
 export interface FleetStatePayload {
   nodes: Record<NodeId, NodeSnapshot>;
   history: Record<NodeId, HistoryPoint[]>;
-  fabric: FabricTelemetry;
+  probes: FabricProbeResult[];
   localHost: LocalHostSnapshot;
   alerts: AlertItem[];
 }
@@ -191,7 +177,7 @@ export interface FleetStatePayload {
 export interface FleetTick {
   nodes: Record<NodeId, NodeSnapshot>;
   points: Record<NodeId, HistoryPoint[]>;
-  fabric: FabricTelemetry;
+  probes: FabricProbeResult[];
   localHost: LocalHostSnapshot;
   alerts: AlertItem[];
 }

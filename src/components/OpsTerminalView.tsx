@@ -1,9 +1,8 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Play, Radio, RotateCw, Terminal as TermIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { NODE_IDS } from "../../shared/fleet-state";
+import { Play, Radio, RotateCw, Terminal as TermIcon, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ExecResult, NodeId, NodeSnapshot } from "../../shared/types";
 import { errorMessage, postJson } from "../api";
 
@@ -11,13 +10,12 @@ type TerminalFrame = { type: "output"; data: string } | { type: "exit"; code: nu
 
 interface SshTerminalPaneProps {
   node: NodeSnapshot;
-  /** A line to type into this terminal; `seq` changes on every send. */
-  broadcast: { seq: number; text: string } | null;
+  onSocketChange: (id: NodeId, socket: WebSocket | undefined) => void;
+  onClose: () => void;
 }
 
-function SshTerminalPane({ node, broadcast }: SshTerminalPaneProps) {
+function SshTerminalPane({ node, onSocketChange, onClose }: SshTerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<"connecting" | "live" | "closed">("connecting");
   const [session, setSession] = useState(0);
 
@@ -48,8 +46,7 @@ function SshTerminalPane({ node, broadcast }: SshTerminalPaneProps) {
     fit.fit();
 
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${scheme}://${window.location.host}/ws/terminal?node=${node.id}`);
-    wsRef.current = ws;
+    const ws = new WebSocket(`${scheme}://${window.location.host}/ws/terminal?node=${encodeURIComponent(node.id)}`);
     setStatus("connecting");
 
     const syncSize = () => {
@@ -61,6 +58,7 @@ function SshTerminalPane({ node, broadcast }: SshTerminalPaneProps) {
 
     ws.onopen = () => {
       setStatus("live");
+      onSocketChange(node.id, ws);
       syncSize();
     };
     ws.onmessage = (ev) => {
@@ -69,9 +67,15 @@ function SshTerminalPane({ node, broadcast }: SshTerminalPaneProps) {
         term.write(frame.data);
       } else {
         term.writeln(`\r\n\x1b[31m[SSH session exited with code ${frame.code}]\x1b[0m`);
+        setStatus("closed");
+        onSocketChange(node.id, undefined);
       }
     };
-    ws.onclose = () => setStatus("closed");
+    ws.onclose = (ev) => {
+      setStatus("closed");
+      onSocketChange(node.id, undefined);
+      if (!ev.wasClean) term.writeln("\r\n\x1b[31m[Terminal connection lost or refused]\x1b[0m");
+    };
 
     const input = term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
@@ -82,35 +86,34 @@ function SshTerminalPane({ node, broadcast }: SshTerminalPaneProps) {
     return () => {
       resizeObserver.disconnect();
       input.dispose();
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      onSocketChange(node.id, undefined);
       ws.close();
       term.dispose();
-      wsRef.current = null;
     };
-  }, [node.id, node.accent, session]);
-
-  useEffect(() => {
-    const ws = wsRef.current;
-    if (broadcast && ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "input", data: broadcast.text }));
-    }
-  }, [broadcast]);
+  }, [node.id, node.accent, onSocketChange, session]);
 
   const statusColor =
     status === "live" ? "var(--spark0)" : status === "connecting" ? "var(--amber)" : "var(--crimson)";
 
   return (
-    <div className="panel">
-      <div className="panel-header">
+    <div className="panel" style={{ minWidth: 0 }}>
+      <div className="panel-header" style={{ flexWrap: "wrap" }}>
         <div className="panel-title">
           <TermIcon size={14} color={node.accent} />
           {node.label} · SSH ({node.sshHost})
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
           <span className="mono" style={{ fontSize: 10.5, color: statusColor }}>
             ● {status.toUpperCase()}
           </span>
           <button type="button" className="btn btn-sm" onClick={() => setSession((s) => s + 1)}>
             <RotateCw size={11} /> RECONNECT
+          </button>
+          <button type="button" className="btn btn-sm" onClick={onClose} aria-label={`Close terminal for ${node.id}`}>
+            <X size={11} /> CLOSE
           </button>
         </div>
       </div>
@@ -132,32 +135,49 @@ const DEFAULT_COMMAND =
 
 interface OpsTerminalViewProps {
   nodes: Record<NodeId, NodeSnapshot>;
+  initialNodeId?: NodeId;
 }
 
-export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
+export default function OpsTerminalView({ nodes, initialNodeId }: OpsTerminalViewProps) {
+  const nodeIds = Object.keys(nodes);
+  const [openIds, setOpenIds] = useState<NodeId[]>(() => {
+    if (initialNodeId !== undefined) return nodeIds.filter((id) => id === initialNodeId);
+    return nodeIds.length <= 2 ? nodeIds : [];
+  });
   const [command, setCommand] = useState(DEFAULT_COMMAND);
-  const [targets, setTargets] = useState<NodeId[]>([...NODE_IDS]);
+  const [targets, setTargets] = useState<NodeId[]>(openIds);
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<ExecResult[]>([]);
   const [execError, setExecError] = useState<string | null>(null);
   const [syncInput, setSyncInput] = useState("");
-  const [broadcast, setBroadcast] = useState<{ seq: number; text: string } | null>(null);
+  const [sockets, setSockets] = useState<Partial<Record<NodeId, WebSocket>>>({});
+  const onSocketChange = useCallback((id: NodeId, socket: WebSocket | undefined) => {
+    if (!socket) setSyncInput("");
+    setSockets((prev) => prev[id] === socket ? prev : { ...prev, [id]: socket });
+  }, []);
 
-  // At least one node stays selected.
-  const toggleTarget = (id: NodeId) =>
-    setTargets((prev) => {
-      if (!prev.includes(id)) return [...prev, id];
-      return prev.length > 1 ? prev.filter((x) => x !== id) : prev;
-    });
+  const paneIds = nodeIds.filter((id) => openIds.includes(id));
+  const recipients = paneIds.map((id) => sockets[id]).filter((ws): ws is WebSocket => ws !== undefined);
+  const allLive = paneIds.length > 0 && recipients.length === paneIds.length;
+
+  const togglePane = (id: NodeId) => {
+    setOpenIds((prev) => prev.includes(id) ? prev.filter((openId) => openId !== id) : [...prev, id]);
+    // A draft intended for the old recipient set must not follow the operator to a new one.
+    setSyncInput("");
+  };
 
   const execute = async (cmd: string) => {
-    if (!cmd.trim()) return;
+    if (running || targets.length === 0 || !cmd.trim()) return;
     setCommand(cmd);
     setRunning(true);
+    setResults([]);
+    setExecError(null);
     try {
-      const res = await postJson<{ results: ExecResult[] }>("/api/exec", { nodes: targets, command: cmd });
+      const res = await postJson<{ results: ExecResult[] }>("/api/exec", {
+        nodes: nodeIds.filter((id) => targets.includes(id)),
+        command: cmd,
+      });
       setResults(res.results);
-      setExecError(null);
     } catch (err) {
       setExecError(errorMessage(err));
     } finally {
@@ -165,27 +185,45 @@ export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
     }
   };
 
-  const sendToBothTerminals = () => {
-    if (!syncInput.trim()) return;
-    setBroadcast((prev) => ({ seq: (prev?.seq ?? 0) + 1, text: `${syncInput}\r` }));
+  const broadcast = () => {
+    if (!syncInput.trim() || !allLive || recipients.some((ws) => ws.readyState !== WebSocket.OPEN)) return;
+    // Send only to this render's indicated sessions. Never queue input for a future socket.
+    const frame = JSON.stringify({ type: "input", data: `${syncInput}\r` });
+    for (const ws of recipients) ws.send(frame);
     setSyncInput("");
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div className="panel">
-        <div className="panel-header">
+        <div className="panel-header" style={{ flexWrap: "wrap" }}>
           <div className="panel-title">
             <Radio size={14} color="var(--spark0)" />
             PARALLEL COMMAND RUNNER
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {NODE_IDS.map((id) => (
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+            {nodeIds.length > 1 && (
+              <button
+                type="button"
+                className={`btn btn-sm ${targets.length === nodeIds.length ? "btn-primary" : ""}`}
+                aria-pressed={targets.length === nodeIds.length}
+                disabled={running}
+                onClick={() => setTargets(targets.length === nodeIds.length ? [] : nodeIds)}
+              >
+                ALL NODES
+              </button>
+            )}
+            {nodeIds.map((id) => (
               <button
                 key={id}
                 type="button"
                 className={`btn btn-sm ${targets.includes(id) ? "btn-primary" : ""}`}
-                onClick={() => toggleTarget(id)}
+                aria-pressed={targets.includes(id)}
+                disabled={running}
+                title={`Command target: ${id}`}
+                onClick={() => setTargets((prev) =>
+                  prev.includes(id) ? prev.filter((targetId) => targetId !== id) : [...prev, id]
+                )}
               >
                 {nodes[id].label}
               </button>
@@ -194,19 +232,26 @@ export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
         </div>
 
         <div className="panel-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", gap: 8 }}>
+          <form
+            style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              void execute(command);
+            }}
+          >
             <input
               className="cmd-input"
+              style={{ minWidth: 0, flexBasis: 220 }}
               aria-label="Command to run on the selected nodes"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && execute(command)}
               placeholder="Run a command on the selected nodes..."
             />
-            <button type="button" className="btn btn-primary" onClick={() => execute(command)} disabled={running}>
-              <Play size={12} /> {running ? "RUNNING..." : "EXEC ON FLEET"}
+            <button type="submit" className="btn btn-primary" disabled={running || !targets.length || !command.trim()}>
+              <Play size={12} />
+              {running ? "RUNNING..." : `EXEC ON ${targets.length} ${targets.length === 1 ? "NODE" : "NODES"}`}
             </button>
-          </div>
+          </form>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {PRESET_COMMANDS.map((preset) => (
@@ -214,7 +259,7 @@ export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
                 key={preset.label}
                 type="button"
                 className="btn btn-sm"
-                disabled={running}
+                disabled={running || !targets.length}
                 onClick={() => execute(preset.cmd)}
               >
                 {preset.label}
@@ -229,13 +274,13 @@ export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
           )}
 
           {results.length > 0 && (
-            <div className="dual-grid">
+            <div className="fleet-grid">
               {results.map((r) => {
                 const flags = [r.timedOut && "TIMED OUT", r.truncated && "OUTPUT TRUNCATED"].filter(Boolean);
                 const ok = r.exitCode === 0 && flags.length === 0;
                 return (
-                  <div key={r.nodeId} className="telemetry-box">
-                    <div className="telemetry-box-head">
+                  <div key={r.nodeId} className="telemetry-box" style={{ minWidth: 0 }}>
+                    <div className="telemetry-box-head" style={{ flexWrap: "wrap", gap: 6 }}>
                       <span className="telemetry-box-label" style={{ color: nodes[r.nodeId].accent }}>
                         {nodes[r.nodeId].label} ({r.sshHost})
                       </span>
@@ -247,7 +292,9 @@ export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
                       </span>
                     </div>
                     <pre className="log-pre" style={{ maxHeight: 220 }}>
-                      {r.stdout || r.stderr || "(no output)"}
+                      {r.stdout || (!r.stderr && "(no output)")}
+                      {r.stdout && r.stderr ? "\n" : ""}
+                      {r.stderr}
                     </pre>
                   </div>
                 );
@@ -258,31 +305,64 @@ export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
       </div>
 
       <div className="panel">
-        <div className="panel-header">
+        <div className="panel-header" style={{ flexWrap: "wrap" }}>
           <div className="panel-title">
             <TermIcon size={14} color="var(--spark1)" />
             INTERACTIVE SSH TERMINALS
           </div>
-          <div style={{ display: "flex", gap: 8, width: "min(480px, 55%)" }}>
+          <span className="mono" style={{ fontSize: 11, color: "var(--fg-muted)" }}>
+            {recipients.length}/{paneIds.length} PANES LIVE
+          </span>
+        </div>
+        <div className="panel-body" style={{ display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {nodeIds.map((id) => {
+              const open = openIds.includes(id);
+              return (
+                <button
+                  type="button"
+                  key={id}
+                  className={`btn btn-sm ${open ? "btn-primary" : ""}`}
+                  aria-pressed={open}
+                  title={`${open ? "Close" : "Open"} terminal for ${id}`}
+                  onClick={() => togglePane(id)}
+                >
+                  {open ? "CLOSE" : "OPEN"} · {nodes[id].label}
+                </button>
+              );
+            })}
+          </div>
+          <label htmlFor="terminal-broadcast" className="mono" style={{ fontSize: 11, color: "var(--fg-secondary)" }}>
+            BROADCAST TO: {paneIds.length
+              ? paneIds.map((id) => `${nodes[id].label} (${id})`).join(" · ")
+              : "NO OPEN TERMINALS"}
+          </label>
+          <form
+            style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              broadcast();
+            }}
+          >
             <input
+              id="terminal-broadcast"
               className="cmd-input"
-              aria-label="Line to send to both terminals"
-              style={{ padding: "5px 10px", fontSize: 11.5 }}
+              style={{ minWidth: 0, flexBasis: 220, padding: "5px 10px", fontSize: 11.5 }}
               value={syncInput}
               onChange={(e) => setSyncInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendToBothTerminals()}
-              placeholder="Send a line to BOTH terminals (Enter)..."
+              disabled={!allLive}
+              placeholder={allLive ? "Send a line to the listed terminals..." : "Open terminals; all listed panes must be live to send."}
             />
-            <button type="button" className="btn btn-sm btn-primary" onClick={sendToBothTerminals}>
+            <button type="submit" className="btn btn-sm btn-primary" disabled={!allLive || !syncInput.trim()}>
               SYNC SEND
             </button>
-          </div>
+          </form>
         </div>
       </div>
 
-      <div className="dual-grid">
-        {NODE_IDS.map((id) => (
-          <SshTerminalPane key={id} node={nodes[id]} broadcast={broadcast} />
+      <div className="fleet-grid">
+        {paneIds.map((id) => (
+          <SshTerminalPane key={id} node={nodes[id]} onSocketChange={onSocketChange} onClose={() => togglePane(id)} />
         ))}
       </div>
     </div>

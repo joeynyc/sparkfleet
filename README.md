@@ -1,6 +1,6 @@
 # SparkFleet
 
-A localhost dashboard and control plane for a pair of **NVIDIA DGX Spark** nodes, run from a Mac or Linux workstation over your existing SSH configuration.
+A localhost dashboard and control plane for **one to eight NVIDIA DGX Spark nodes**, run from a Mac or Linux workstation over SSH. It connects only to the hosts you configure; there is no network scan.
 
 Nothing is installed on the nodes. SparkFleet streams a small Python agent to each one over SSH and serves a Bun + React dashboard on `127.0.0.1:7700`.
 
@@ -11,15 +11,17 @@ Nothing is installed on the nodes. SparkFleet streams a small Python agent to ea
 - **Live GPU telemetry at 1 Hz:** utilization, clock, power draw, thermal-limit margin, per-sensor temperatures, fan speed and the processes holding GPU memory.
 - **Unified memory breakdown:** GPU allocations, host processes, page cache and swap per node.
 - **Per-core CPU matrix** with frequency and I/O wait.
-- **Node-to-node fabric view:** throughput in each direction, link state and speed for up to two direct links, plus on-demand latency probes between the nodes.
+- **Network interfaces and peer latency:** see RX/TX rates, byte counters, link state and speed per interface. Select a source and target to measure latency over the LAN and any matching fabric subnets.
 - **Disk pressure alerts** using the same used/available figure as `df`, with a one-click breakdown of home-directory and Docker usage.
-- **Docker control:** every container on both nodes, with start, stop, restart and a log viewer, alongside top processes and listening ports.
-- **Comparison charts:** a rolling five-minute window of GPU load, power, fabric throughput, temperature, CPU and memory for both nodes.
-- **Parallel commands and terminals:** run one command on both nodes with timed output, or work in two interactive SSH terminals and send a line to both at once.
+- **Docker control:** view and filter containers by node, read logs, or start, stop and restart a selected container.
+- **Comparison charts:** compare a rolling five-minute history of GPU load, power, fabric throughput, temperature, CPU and memory across configured nodes. Offline nodes stay visible but do not contribute to live fleet totals.
+- **Commands and terminals:** run a command on selected nodes or the whole fleet. Open SSH from an individual node card, or open several panes and broadcast to those live sessions.
 
-Network interfaces and the root disk are detected on each node: the interface with the default route is treated as the LAN, and other wired interfaces with an address are treated as fabric links.
+Each node detects its own root disk, LAN (the default route), and up to two addressed wired fabric interfaces. Fabric A/B names are local to each node; the dashboard does not assume a direct cable or attribute an interface's traffic to a specific peer. A single Spark needs no fabric link. Two nodes get one initial peer probe when both are online; larger fleets probe only on request.
 
 ## Screenshots
+
+![Eight simulated Sparks reporting LAN and fabric counters in the network panel](docs/assets/eight-node-fabric.webp)
 
 | Fleet deck | Workloads |
 |---|---|
@@ -29,12 +31,12 @@ Network interfaces and the root disk are detected on each node: the interface wi
 |---|---|
 | ![Rolling charts comparing both nodes](docs/assets/oscilloscopes.png) | ![Parallel command output above two SSH terminals](docs/assets/terminals.png) |
 
-The images show synthetic demo data, not a real cluster.
+All visuals use synthetic data. The network panel shows the current eight-node view; the tour and four screenshots below it show an earlier two-node layout.
 
 ## Requirements
 
 - [Bun](https://bun.sh) 1.3+ on the workstation (macOS or Linux), along with `ssh` and `ping`
-- Key-based SSH access to both nodes, each already present in `known_hosts` (connect once by hand first)
+- Key-based SSH access from the workstation to each configured Spark. Connect to each alias once by hand to verify its host key, then check that `ssh -o BatchMode=yes YOUR_ALIAS hostname` works without a prompt.
 - On the nodes: `python3`, `nvidia-smi`, `docker`, `bash` and the usual Linux tools (`timeout`, `ip`, `ss`, `ps`). All of them ship with DGX OS
 
 ## Quick start
@@ -44,16 +46,28 @@ The images show synthetic demo data, not a real cluster.
    bun install
    ```
 
-2. Tell SparkFleet which SSH hosts to use. Copy the example and set each `sshHost` to an alias from `~/.ssh/config` (NVIDIA Sync aliases work as they are):
+2. Copy the one-node example and set `sshHost` to that Spark's alias in `~/.ssh/config` (NVIDIA Sync aliases work too):
    ```bash
    cp sparkfleet.config.example.json sparkfleet.config.json
    ```
-   `sshHost` is the only required field; `label`, `role` and `accent` are cosmetic. The file is gitignored.
+   Add one entry for each additional Spark under `nodes`. Use distinct keys from `spark-0` through `spark-7`; gaps are fine. For example, a two-Spark config is:
 
-   Environment variables override the file:
+   ```json
+   {
+     "nodes": {
+       "spark-0": { "sshHost": "my-spark-1" },
+       "spark-1": { "sshHost": "my-spark-2" }
+     }
+   }
+   ```
+
+   For eight Sparks, add six more entries through `"spark-7": { "sshHost": "my-spark-8" }`. For one, keep just the first entry. No count setting or code change is needed. Existing two-node configs keep their IDs and labels. Restart SparkFleet after editing. Keep your real aliases in the gitignored `sparkfleet.config.json`.
+
+   Alternatively, skip the config file and list the hosts in your environment:
    ```bash
    SPARK0_HOST=my-spark-1 SPARK1_HOST=my-spark-2 bun run start
    ```
+   If the file already lists `nodes`, its membership is authoritative: `SPARKn_HOST` can override a listed host, not add an unlisted one. With no configured hosts SparkFleet prints a setup error instead of trying guessed aliases.
 
 3. Build and start:
    ```bash
@@ -65,8 +79,9 @@ The images show synthetic demo data, not a real cluster.
 
 | Setting | Where | Default |
 |---|---|---|
-| SSH host per node | `nodes.spark-0.sshHost`, `SPARK0_HOST` (and `spark-1`, `SPARK1_HOST`) | `spark-1`, `spark-2` |
-| Display label, role | `nodes.*.label`, `nodes.*.role`, `SPARK0_LABEL`, `SPARK0_ROLE` | `SPARK-01`, `RANK 0 · PRIMARY` |
+| SSH destination | `nodes.spark-N.sshHost` or `SPARKN_HOST` (`N` = `0`…`7`) | None; configure one distinct SSH destination per Spark |
+| Display label, role | `nodes.spark-N.label`, `.role` or `SPARKN_LABEL`, `SPARKN_ROLE` | `SPARK-01`…`SPARK-08`, `DGX SPARK` |
+| Display color | `nodes.spark-N.accent` (`#RRGGBB`) | One color per slot |
 | Port | `port`, `SPARKFLEET_PORT` | `7700` |
 | Config file path | `SPARKFLEET_CONFIG` | `./sparkfleet.config.json` |
 | Fixed access token | `SPARKFLEET_TOKEN` (24+ characters) | random per launch |
@@ -100,7 +115,7 @@ The server can run arbitrary commands on your cluster, so it treats every reques
 - **Redacted process arguments.** Values of flags and variables that look like credentials are masked before process lists reach the browser.
 - **No third-party requests.** Fonts and scripts are served locally under a restrictive Content-Security-Policy.
 
-Anyone holding the access link can run commands as your SSH user on both nodes. Treat it like a password.
+Anyone holding the access link can run commands as your SSH user on every configured node. Treat it like a password.
 
 SparkFleet keeps one multiplexed SSH connection per node open (`~/.ssh/sparkfleet-*` control sockets); they close on their own a minute after the server stops.
 

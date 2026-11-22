@@ -13,7 +13,7 @@ const point = (gpuUtil: number): HistoryPoint => ({
 
 const live = {
   nodes: {} as FleetStatePayload["nodes"],
-  fabric: {} as FleetStatePayload["fabric"],
+  probes: [],
   localHost: {} as FleetStatePayload["localHost"],
   alerts: [],
 };
@@ -48,6 +48,15 @@ test("does not mutate the previous state", () => {
   const prev = stateWith([1], []);
   applyTick(prev, tickWith([2], []));
   expect(utils(prev.history["spark-0"])).toEqual([1]);
+});
+
+test("a tick keeps sparse configured IDs and never adds placeholder nodes", () => {
+  const history = { "spark-7": [point(17)], "spark-2": [point(2)] };
+  const points = { "spark-7": [point(18)], "spark-2": [] };
+  const next = applyTick({ ...live, history }, { ...live, points });
+  expect(Object.keys(next.history)).toEqual(["spark-7", "spark-2"]);
+  expect(utils(next.history["spark-7"])).toEqual([17, 18]);
+  expect(next.history["spark-2"]).toBe(history["spark-2"]);
 });
 
 test("takes live sections from the tick", () => {

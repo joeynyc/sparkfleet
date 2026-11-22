@@ -1,17 +1,6 @@
 {
   "port": 7700,
   "nodes": {
-    "spark-0": {
-      "sshHost": "spark-1",
-      "label": "SPARK-01",
-      "role": "RANK 0 · PRIMARY",
-      "accent": "#76B900"
-    },
-    "spark-1": {
-      "sshHost": "spark-2",
-      "label": "SPARK-02",
-      "role": "RANK 1 · PEER",
-      "accent": "#38BDF8"
-    }
+    "spark-0": { "sshHost": "my-spark-1" }
   }
 }

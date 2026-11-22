@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { NODE_IDS } from "../shared/fleet-state";
 import type { FleetTick, NodeId, ServerMessage } from "../shared/types";
 import { FleetBusyError, FleetCollector } from "./collector";
-import { NODES, SERVER_PORT } from "./config";
+import { NODES, NODE_IDS, SERVER_PORT } from "./config";
+import { ProbeError } from "./fabric-probe";
 import {
   type AccessDenial,
   checkAccess,
@@ -13,6 +13,7 @@ import {
   tokenMatches,
 } from "./security";
 import { sshTerminalArgs } from "./ssh";
+import { execTargets, isConfiguredNode } from "./targets";
 
 const DIST_DIR = path.resolve(import.meta.dir, "../dist");
 const MAX_TERMINALS = 8;
@@ -76,12 +77,12 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function isValidNodeId(v: string | null | undefined): v is NodeId {
-  return v === "spark-0" || v === "spark-1";
+function isValidNodeId(value: unknown): value is NodeId {
+  return isConfiguredNode(NODE_IDS, value);
 }
 
-function sanitizeContainerName(name: string): string | null {
-  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name) ? name : null;
+function sanitizeContainerName(name: unknown): string | null {
+  return typeof name === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name) ? name : null;
 }
 
 const telemetryClients = new Set<Bun.ServerWebSocket<WsData>>();
@@ -115,7 +116,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (route === "POST /api/fabric/probe") {
-    return json(await collector.runFabricProbe());
+    const body = (await req.json().catch(() => null)) as { source?: unknown; target?: unknown } | null;
+    return json(await collector.runFabricProbe(body?.source, body?.target));
   }
 
   if (route === "POST /api/exec") {
@@ -124,13 +126,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       command?: unknown;
     } | null;
     const command = typeof body?.command === "string" ? body.command.trim() : "";
-    if (!command) return json({ error: "command required" }, 400);
+    if (!body || !command) return json({ error: "command required" }, 400);
     if (command.length > MAX_COMMAND_LENGTH) {
       return json({ error: `command exceeds ${MAX_COMMAND_LENGTH} characters` }, 400);
     }
-    const requested = Array.isArray(body?.nodes) ? body.nodes : NODE_IDS;
-    const targets = [...new Set(requested.filter(isValidNodeId))];
-    if (targets.length === 0) return json({ error: "no valid target nodes" }, 400);
+    const targets = execTargets(NODE_IDS, body);
+    if (!targets) return json({ error: "targets must be a nonempty array of configured node IDs" }, 400);
 
     const results = await Promise.all(
       targets.map((id) => collector.execOnNode(id, command, 30000))
@@ -246,8 +247,9 @@ const server = Bun.serve<WsData>({
       const nodeParam = url.searchParams.get("node");
       if (!isValidNodeId(nodeParam)) return respond("Invalid node", 400);
       if (openTerminals >= MAX_TERMINALS) return respond("Too many open terminals", 429);
-      if (srv.upgrade(req, { data: { kind: "terminal", nodeId: nodeParam } })) return;
-      return respond("Upgrade failed", 400);
+      if (!srv.upgrade(req, { data: { kind: "terminal", nodeId: nodeParam } })) return respond("Upgrade failed", 400);
+      openTerminals++;
+      return;
     }
 
     if (url.pathname.startsWith("/api/")) {
@@ -255,6 +257,7 @@ const server = Bun.serve<WsData>({
         return await handleApi(req, url);
       } catch (err) {
         if (err instanceof FleetBusyError) return json({ error: err.message }, 429);
+        if (err instanceof ProbeError) return json({ error: err.message }, err.status);
         console.error(`${req.method} ${url.pathname} failed:`, err);
         return json({ error: "internal error" }, 500);
       }
@@ -273,7 +276,6 @@ const server = Bun.serve<WsData>({
         return;
       }
 
-      openTerminals++;
       // Streaming decode: a multi-byte character may straddle two PTY chunks.
       const decoder = new TextDecoder();
       const proc = Bun.spawn(sshTerminalArgs(NODES[ws.data.nodeId].sshHost), {

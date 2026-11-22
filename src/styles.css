@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg-chassis: #08090c;
   --bg-panel: #0e1116;
   --bg-panel-raised: #131820;
@@ -126,6 +127,8 @@ body {
 
 .nav-tabs {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 4px;
   background: var(--bg-recess);
@@ -175,6 +178,8 @@ body {
 
 .topbar-right {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
@@ -262,6 +267,8 @@ body {
 .alert-chip {
   flex: 1 1 320px;
   display: flex;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -358,6 +365,7 @@ body {
 
 .panel-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -373,6 +381,8 @@ body {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   display: flex;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
   align-items: center;
   gap: 8px;
 }
@@ -381,11 +391,19 @@ body {
   padding: 14px;
 }
 
-/* Dual Node Grid */
-.dual-grid {
+/* Keep a single panel full-width; wider fleets get at most two detail panels per row. */
+.fleet-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.fleet-grid > * {
+  min-width: 0;
+}
+
+.fleet-grid > :only-child {
+  grid-column: 1 / -1;
 }
 
 .node-card {
@@ -399,10 +417,11 @@ body {
   padding: 12px 15px;
   border-bottom: 1px solid var(--border-hair);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  background: linear-gradient(90deg, var(--node-tint), transparent 55%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--node-accent) 14%, transparent), transparent 55%);
 }
 
 .node-name {
@@ -411,6 +430,8 @@ body {
   font-weight: 700;
   letter-spacing: 0.09em;
   display: flex;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
   align-items: center;
   gap: 9px;
 }
@@ -430,9 +451,10 @@ body {
 }
 
 /* Hero Metrics Inside Node Card */
-.node-hero-grid {
+.node-hero-grid,
+.node-health-grid {
   display: grid;
-  grid-template-columns: 1.35fr 1fr;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -444,6 +466,8 @@ body {
 
 .telemetry-box-head {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
   justify-content: space-between;
   align-items: baseline;
   margin-bottom: 6px;
@@ -574,67 +598,108 @@ body {
   font-size: 11px;
 }
 
-/* Fabric Bridge Visualizer */
+/* Fabric inventory & directed peer probes */
 .fabric-panel {
   background: linear-gradient(180deg, rgba(14, 17, 22, 0.98), rgba(9, 12, 17, 0.98));
   border: 1px solid var(--border-hair);
 }
 
-.fabric-grid {
-  display: grid;
-  grid-template-columns: 220px 1fr 220px;
-  align-items: center;
-  gap: 16px;
-  padding: 16px;
+.fabric-inventory {
+  padding: 12px;
+  gap: 10px;
 }
 
 .fabric-endpoint {
   background: var(--bg-recess);
   border: 1px solid var(--border-hair);
-  padding: 12px;
+  border-left-width: 3px;
 }
 
-.fabric-pipes {
+.fabric-endpoint-head,
+.probe-controls,
+.probe-result {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  overflow-wrap: anywhere;
 }
 
-.fabric-lane {
-  background: var(--bg-recess);
-  border: 1px solid var(--border-hair);
+.fabric-endpoint-head {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-hair);
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+
+.fabric-endpoint-head strong {
+  font-size: 13px;
+}
+
+.host-rtt {
+  margin-left: auto;
+  font: 10.5px var(--font-mono);
+  color: var(--teal);
+}
+
+.interface-scroll {
+  overflow-x: auto;
+}
+
+.interface-table {
+  white-space: nowrap;
+}
+
+.interface-table small {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--fg-secondary);
+}
+
+.fabric-note,
+.probe-result,
+.probe-controls label {
+  color: var(--fg-secondary);
+  font: 11px var(--font-mono);
+}
+
+.fabric-note {
+  margin: 0;
   padding: 10px 14px;
-  position: relative;
 }
 
-.lane-track {
-  position: relative;
-  height: 8px;
-  background: #131922;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  margin: 8px 0;
-  overflow: hidden;
+.probe-console {
+  display: grid;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-hair);
 }
 
-.lane-flow {
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    90deg,
-    transparent 0px,
-    transparent 14px,
-    rgba(118, 185, 0, 0.55) 14px,
-    rgba(56, 189, 248, 0.75) 26px,
-    transparent 26px,
-    transparent 42px
-  );
-  background-size: 84px 100%;
-  animation: flowRight 1.4s linear infinite;
+.probe-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
 }
 
-@keyframes flowRight {
-  from { background-position: 0 0; }
-  to { background-position: 84px 0; }
+.probe-controls select {
+  min-width: 0;
+  max-width: 28ch;
+  font: inherit;
+  color: var(--fg-primary);
+  background: var(--bg-panel-raised);
+  border: 1px solid var(--border-strong);
+  padding: 4px;
+}
+
+.probe-result strong {
+  color: var(--fg-primary);
+}
+
+.chart-legend {
+  overflow-wrap: anywhere;
+  margin-bottom: 6px;
 }
 
 /* Tables & Buttons */
@@ -697,6 +762,12 @@ body {
   font-weight: 500;
 }
 
+.interface-table tbody th {
+  color: var(--fg-primary);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 .data-table td {
   padding: 8px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
@@ -740,6 +811,7 @@ body {
 
 .cmd-input {
   flex: 1;
+  min-width: 0;
   background: var(--bg-recess);
   border: 1px solid var(--border-strong);
   color: var(--fg-primary);
@@ -773,24 +845,38 @@ body {
   .summary-ribbon {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .dual-grid {
-    grid-template-columns: 1fr;
+  .fleet-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .fabric-grid {
-    grid-template-columns: 1fr;
+  .topbar {
+    height: auto;
+    min-height: 54px;
+    flex-wrap: wrap;
+    padding-block: 8px;
+  }
+  .host-pill {
+    flex-wrap: wrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 
 @media (max-width: 760px) {
   .topbar {
-    height: auto;
-    flex-wrap: wrap;
-    padding: 10px 14px;
+    position: static;
+    gap: 8px;
   }
   .summary-ribbon {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .node-hero-grid {
-    grid-template-columns: 1fr;
+  .node-hero-grid,
+  .node-health-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot, .spin {
+    animation: none;
   }
 }

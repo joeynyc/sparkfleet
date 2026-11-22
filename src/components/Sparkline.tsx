@@ -52,7 +52,8 @@ export function Sparkline({
       return;
     }
 
-    const peak = Math.max(...values, max ?? 1);
+    const samplePeak = Math.max(...values);
+    const peak = Math.max(samplePeak, max ?? 1);
     const floor = min;
     const span = Math.max(0.001, peak - floor);
     const padTop = 6;
@@ -103,7 +104,7 @@ export function Sparkline({
     // Peak watermark
     ctx.fillStyle = "rgba(152,164,181,0.55)";
     ctx.font = '9.5px "IBM Plex Mono", monospace';
-    ctx.fillText(`PK ${peak.toFixed(peak >= 100 ? 0 : 1)}${unit}`, 4, 11);
+    ctx.fillText(`PK ${samplePeak.toFixed(samplePeak >= 100 ? 0 : 1)}${unit}`, 4, 11);
   }, [values, max, min, color, height, fillAlpha, unit]);
 
   return (
@@ -114,29 +115,27 @@ export function Sparkline({
   );
 }
 
-interface DualChartProps {
-  seriesA: number[];
-  seriesB: number[];
-  labelA: string;
-  labelB: string;
-  colorA: string;
-  colorB: string;
+interface ChartSeries {
+  id: string;
+  label: string;
+  color: string;
+  connected: boolean;
+  values: number[];
+}
+
+interface ChartProps {
+  series: ChartSeries[];
   max?: number;
   unit?: string;
   height?: number;
 }
 
-export function DualTelemetryChart({
-  seriesA,
-  seriesB,
-  labelA,
-  labelB,
-  colorA,
-  colorB,
+export function TelemetryChart({
+  series,
   max,
   unit = "",
   height = 148,
-}: DualChartProps) {
+}: ChartProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -152,18 +151,21 @@ export function DualTelemetryChart({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
-    const padLeft = 64;
+    let peak = Math.max(1, max ?? 0);
+    let sampleCount = 0;
+    for (const { values } of series) {
+      sampleCount = Math.max(sampleCount, values.length);
+      for (const value of values) peak = Math.max(peak, value);
+    }
+    ctx.font = '10px "IBM Plex Mono", monospace';
+    const padLeft = Math.ceil(ctx.measureText(`${peak.toFixed(1)}${unit}`).width) + 10;
     const padRight = 10;
     const padTop = 14;
     const padBottom = 18;
     const plotW = Math.max(40, width - padLeft - padRight);
     const plotH = Math.max(40, height - padTop - padBottom);
 
-    const all = [...seriesA, ...seriesB];
-    const peak = Math.max(max ?? 10, ...all, 1);
-
     // Horizontal grid + axis labels
-    ctx.font = '10px "IBM Plex Mono", monospace';
     for (let i = 0; i <= 4; i++) {
       const y = Math.round(padTop + (plotH / 4) * i) + 0.5;
       ctx.strokeStyle = i === 4 ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.06)";
@@ -183,51 +185,54 @@ export function DualTelemetryChart({
       );
     }
 
-    const drawSeries = (vals: number[], color: string) => {
-      if (vals.length < 2) return;
-      const stepX = plotW / Math.max(1, vals.length - 1);
+    // Right-align the latest sample. Short histories must not stretch across the entire window.
+    const stepX = plotW / Math.max(1, sampleCount - 1);
+    for (const { values, color } of series) {
+      if (!values.length) continue;
       ctx.beginPath();
-      vals.forEach((v, idx) => {
-        const x = padLeft + idx * stepX;
+      values.forEach((v, idx) => {
+        const x = padLeft + plotW - (values.length - idx - 1) * stepX;
         const y = padTop + (1 - Math.min(peak, Math.max(0, v)) / peak) * plotH;
-        if (idx === 0) ctx.moveTo(x, y);
+        if (values.length === 1) ctx.arc(x, y, 2, 0, Math.PI * 2);
+        else if (idx === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
-    };
-
-    drawSeries(seriesA, colorA);
-    drawSeries(seriesB, colorB);
+      if (values.length === 1) {
+        ctx.fillStyle = color;
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+      }
+    }
 
     // Time axis hints
     ctx.textAlign = "left";
     ctx.fillStyle = "rgba(93,104,120,0.9)";
-    const windowSec = Math.max(seriesA.length, seriesB.length);
-    ctx.fillText(`-${windowSec}s`, padLeft, height - 4);
+    ctx.fillText(sampleCount ? `${sampleCount} SAMPLES` : "NO SAMPLES", padLeft, height - 4);
     ctx.textAlign = "right";
-    ctx.fillText("LIVE 1Hz", width - padRight, height - 4);
-
-    // Inline legend
-    ctx.textAlign = "left";
-    ctx.fillStyle = colorA;
-    ctx.fillRect(padLeft + 4, 3, 8, 3);
-    ctx.fillStyle = "#cbd5e1";
-    ctx.fillText(labelA, padLeft + 16, 8);
-
-    const offsetB = padLeft + 16 + ctx.measureText(labelA).width + 16;
-    ctx.fillStyle = colorB;
-    ctx.fillRect(offsetB, 3, 8, 3);
-    ctx.fillStyle = "#cbd5e1";
-    ctx.fillText(labelB, offsetB + 12, 8);
-  }, [seriesA, seriesB, labelA, labelB, colorA, colorB, max, unit, height]);
+    ctx.fillText("LATEST SAMPLE", width - padRight, height - 4);
+  }, [series, max, unit, height]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: "100%", height: `${height}px`, display: "block" }}
-    />
+    <>
+      <div className="legend-row chart-legend">
+        {series.map(({ id, label, color, values, connected }) => (
+          <span key={id}>
+            <i className="legend-dot" style={{ background: color }} />
+            {label} ({id}) · {values.length ? `${values[values.length - 1].toFixed(1)}${unit}` : "No data"}
+            {!connected && " · Offline"}
+          </span>
+        ))}
+      </div>
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label={`Telemetry history in ${unit.trim()}; latest values are listed in the legend.`}
+        style={{ width: "100%", height: `${height}px`, display: "block" }}
+      />
+    </>
   );
 }
 

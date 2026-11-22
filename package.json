@@ -1,7 +1,7 @@
 {
   "name": "sparkfleet",
   "version": "1.0.0",
-  "description": "Localhost dashboard and control plane for a pair of NVIDIA DGX Spark nodes",
+  "description": "Localhost dashboard and control plane for one to eight NVIDIA DGX Spark nodes",
   "license": "MIT",
   "private": true,
   "type": "module",

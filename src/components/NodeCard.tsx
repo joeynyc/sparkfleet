@@ -16,6 +16,63 @@ export function NodeCard({
   onOpenTerminal,
   onInspectStorage,
 }: NodeCardProps) {
+  return (
+    <section
+      className="node-card"
+      style={{ ["--node-accent" as string]: node.accent }}
+    >
+      {/* Header */}
+      <div className="node-card-header">
+        <div>
+          <div className="node-name">
+            <span className={`pulse-dot ${node.connected ? "" : "offline"}`} style={node.connected ? { background: node.accent, boxShadow: `0 0 8px ${node.accent}` } : undefined} />
+            {node.label}
+            <span className="nav-badge mono" style={{ fontSize: 10 }}>
+              {node.hostname}
+            </span>
+          </div>
+          <div className="node-meta">
+            {node.id} · {node.role} · {node.connected
+              ? `UP ${formatUptime(node.uptimeSec)} · LOAD ${node.loadAvg.map((v) => v.toFixed(2)).join(" / ")}`
+              : "OFFLINE"}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button type="button" className="btn btn-sm" onClick={onOpenTerminal}>
+            <Terminal size={12} /> SSH
+          </button>
+        </div>
+      </div>
+
+      {node.connected ? (
+        <NodeMetrics node={node} history={history} onInspectStorage={onInspectStorage} />
+      ) : (
+        <div
+          className="mono"
+          style={{
+            padding: "10px 15px",
+            background: "var(--crimson-dim)",
+            borderBottom: "1px solid rgba(239,68,68,0.35)",
+            color: "#fca5a5",
+            fontSize: 11.5,
+          }}
+        >
+          No live telemetry. {node.error}
+          <button type="button" className="btn btn-sm" style={{ marginLeft: 8 }} onClick={onInspectStorage}>
+            INSPECT STORAGE
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function NodeMetrics({
+  node,
+  history,
+  onInspectStorage,
+}: Pick<NodeCardProps, "node" | "history" | "onInspectStorage">) {
   const memTotal = Math.max(1, node.memory.totalBytes);
   const gpuAllocPct = Math.min(100, (node.memory.gpuAllocatedBytes / memTotal) * 100);
   const sysUsedBytes = Math.max(0, node.memory.usedBytes - node.memory.gpuAllocatedBytes);
@@ -29,52 +86,7 @@ export function NodeCard({
   const gpuPowerSeries = history.map((h) => h.gpuPowerW);
   const lanIf = node.interfaces.find((i) => i.role === "lan");
 
-  const tint =
-    node.id === "spark-0" ? "rgba(118, 185, 0, 0.14)" : "rgba(56, 189, 248, 0.14)";
-
   return (
-    <section
-      className="node-card"
-      style={{ ["--node-tint" as string]: tint }}
-    >
-      {/* Header */}
-      <div className="node-card-header">
-        <div>
-          <div className="node-name">
-            <span className={`pulse-dot ${node.connected ? "" : "offline"}`} style={node.connected ? { background: node.accent, boxShadow: `0 0 8px ${node.accent}` } : undefined} />
-            {node.label}
-            <span className="nav-badge mono" style={{ fontSize: 10 }}>
-              {node.hostname}
-            </span>
-          </div>
-          <div className="node-meta">
-            {node.role} · UP {formatUptime(node.uptimeSec)} · LOAD{" "}
-            {node.loadAvg.map((v) => v.toFixed(2)).join(" / ")}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <button type="button" className="btn btn-sm" onClick={onOpenTerminal}>
-            <Terminal size={12} /> SSH
-          </button>
-        </div>
-      </div>
-
-      {!node.connected && (
-        <div
-          className="mono"
-          style={{
-            padding: "10px 15px",
-            background: "var(--crimson-dim)",
-            borderBottom: "1px solid rgba(239,68,68,0.35)",
-            color: "#fca5a5",
-            fontSize: 11.5,
-          }}
-        >
-          STREAM INTERRUPTED: {node.error}
-        </div>
-      )}
-
       <div className="node-body">
         {/* GPU utilization and power */}
         <div className="node-hero-grid">
@@ -147,7 +159,7 @@ export function NodeCard({
               <div>
                 <div className="mini-stat-label">LAN RX / TX</div>
                 <div className="mini-stat-val" style={{ fontSize: 11 }}>
-                  {formatBps(lanIf?.rxBps ?? 0)} / {formatBps(lanIf?.txBps ?? 0)}
+                  {lanIf ? `${formatBps(lanIf.rxBps)} / ${formatBps(lanIf.txBps)}` : "No LAN data"}
                 </div>
               </div>
               <div>
@@ -252,7 +264,7 @@ export function NodeCard({
         </div>
 
         {/* Thermals, fans and root disk pressure */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 10 }}>
+        <div className="node-health-grid">
           <div className="telemetry-box">
             <div className="telemetry-box-head">
               <span className="telemetry-box-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -354,6 +366,5 @@ export function NodeCard({
           </div>
         )}
       </div>
-    </section>
   );
 }

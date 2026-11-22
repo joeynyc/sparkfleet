@@ -1,178 +1,154 @@
 import { Activity, RefreshCw, Zap } from "lucide-react";
-import type { FabricLink, FabricTelemetry, NodeSnapshot } from "../../shared/types";
+import { useState } from "react";
+import type { FabricProbeResult, NodeSnapshot } from "../../shared/types";
+import { errorMessage, postJson } from "../api";
 import { formatBps, formatBytes } from "../utils/format";
 
 interface FabricBridgeProps {
-  spark0: NodeSnapshot;
-  spark1: NodeSnapshot;
-  fabric: FabricTelemetry;
-  probing: boolean;
-  onRunProbe: () => void;
+  nodes: NodeSnapshot[];
+  probes: FabricProbeResult[];
 }
 
-function formatLinkSpeed(mbps: number | undefined): string {
-  if (!mbps) return "--";
-  return mbps >= 1000 ? `${mbps / 1000}G` : `${mbps}M`;
-}
-
-function Endpoint({ node, side }: { node: NodeSnapshot; side: "left" | "right" }) {
-  const address = (role: "lan" | "fabric-a" | "fabric-b") =>
-    node.interfaces.find((i) => i.role === role);
-  const lan = address("lan");
-  const color = side === "left" ? "var(--spark0)" : "var(--spark1)";
+function InterfacePanel({ node }: { node: NodeSnapshot }) {
   return (
-    <div
-      className="fabric-endpoint"
-      style={
-        side === "left"
-          ? { borderLeft: `3px solid ${color}` }
-          : { borderRight: `3px solid ${color}`, textAlign: "right" }
-      }
-    >
-      <div className="display" style={{ fontSize: 13, fontWeight: 700, color }}>
-        {node.label}
+    <section className="fabric-endpoint" style={{ borderLeftColor: node.accent }}>
+      <div className="fabric-endpoint-head">
+        <strong className="display" style={{ color: node.accent }}>{node.label}</strong>
+        <span className="mono">{node.id} · {node.connected ? "ONLINE" : "OFFLINE"}</span>
+        <span className="host-rtt">
+          LAST HOST RTT · {node.hostRttMs !== null ? `${node.hostRttMs} ms` : "—"}
+        </span>
       </div>
-      <div className="mono" style={{ fontSize: 11, color: "var(--fg-secondary)", marginTop: 4 }}>
-        LAN {lan?.ip || "--"} · {formatLinkSpeed(lan?.speedMbps)}
-      </div>
-      <div className="mono" style={{ fontSize: 10.5, color: "var(--fg-muted)", marginTop: 2 }}>
-        LINK A {address("fabric-a")?.ip || "--"}
-        <br />
-        LINK B {address("fabric-b")?.ip || "--"}
-      </div>
-      <div className="mono" style={{ fontSize: 10.5, marginTop: 6, color: "var(--teal)" }}>
-        HOST RTT: {node.hostRttMs != null ? `${node.hostRttMs} ms` : "--"}
-      </div>
-    </div>
+      {!node.connected ? (
+        <p className="fabric-note">Node offline. No live interface data.</p>
+      ) : node.interfaces.length === 0 ? (
+        <p className="fabric-note">No interfaces reported.</p>
+      ) : (
+        <div className="interface-scroll">
+          <table className="data-table interface-table" aria-label={`${node.label} network interfaces`}>
+            <thead>
+              <tr>
+                <th>Interface</th>
+                <th>Address / subnet</th>
+                <th>Link</th>
+                <th>RX / total</th>
+                <th>TX / total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {node.interfaces.map((nic) => (
+                <tr key={nic.name}>
+                  <th scope="row">
+                    {nic.name}<small>{nic.role.toUpperCase()}</small>
+                  </th>
+                  <td>{nic.ip || "—"}<small>{nic.subnet || "No subnet"}</small></td>
+                  <td>
+                    {nic.operstate.toUpperCase()}
+                    <small>{nic.speedMbps > 0 ? `${nic.speedMbps} Mbps` : "Speed unknown"}</small>
+                  </td>
+                  <td>{formatBps(nic.rxBps)}<small>{formatBytes(nic.rxBytes, 2)}</small></td>
+                  <td>{formatBps(nic.txBps)}<small>{formatBytes(nic.txBytes, 2)}</small></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
-function Lane({ name, link, rttMs }: { name: string; link: FabricLink; rttMs: number | null | undefined }) {
-  const active = link.state === "ACTIVE";
-  const rate = link.spark0To1Bps + link.spark1To0Bps;
-  const netdevs = [...new Set(link.netdevs.filter(Boolean))].join(" / ") || "not detected";
-  return (
-    <div className="fabric-lane">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <div className="mono" style={{ fontSize: 11, fontWeight: 600 }}>
-          <span style={{ color: active ? "var(--spark0)" : "var(--crimson)" }}>●</span> {name}{" "}
-          <span style={{ color: "var(--fg-muted)" }}>({netdevs})</span>
-        </div>
-        <div className="mono" style={{ fontSize: 11, color: "var(--fg-secondary)" }}>
-          {link.subnet || "no address"} ·{" "}
-          <strong style={{ color: "var(--fg-primary)" }}>
-            {link.speedGbps > 0 ? `${link.speedGbps} GbE` : link.state}
-          </strong>
-          {rttMs != null && <span style={{ color: "var(--teal)", marginLeft: 8 }}>{rttMs} ms</span>}
-        </div>
-      </div>
+function PeerProbe({ nodes, probes }: FabricBridgeProps) {
+  const [source, setSource] = useState(nodes[0].id);
+  const [target, setTarget] = useState(nodes[1].id);
+  const [probing, setProbing] = useState(false);
+  const [error, setError] = useState("");
+  const [response, setResponse] = useState<FabricProbeResult | null>(null);
+  const cached = probes.find((p) => p.source === source && p.target === target);
+  const result = response?.source === source && response.target === target && (!cached || response.ts > cached.ts)
+    ? response : cached;
 
-      <div className="lane-track">
-        {active && (
-          <div
-            className="lane-flow"
-            style={{
-              opacity: rate > 200_000 ? 0.95 : 0.25,
-              animationDuration: rate > 50_000_000 ? "0.45s" : "1.6s",
+  async function runProbe() {
+    setProbing(true);
+    setError("");
+    try {
+      setResponse(await postJson<FabricProbeResult>("/api/fabric/probe", { source, target }));
+    } catch (err) {
+      setError(`Probe ${source} → ${target} failed: ${errorMessage(err)}`);
+    } finally {
+      setProbing(false);
+    }
+  }
+
+  return (
+    <div className="probe-console">
+      <div className="probe-controls">
+        <strong className="panel-title"><Activity size={13} aria-hidden="true" /> PEER RTT</strong>
+        <label>
+          Source
+          <select
+            value={source}
+            disabled={probing}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === target) setTarget(source);
+              setSource(next);
+              setError("");
             }}
-          />
-        )}
+          >
+            {nodes.map((n) => <option key={n.id} value={n.id}>{n.label} ({n.id})</option>)}
+          </select>
+        </label>
+        <label>
+          Target
+          <select
+            value={target}
+            disabled={probing}
+            onChange={(event) => { setTarget(event.target.value); setError(""); }}
+          >
+            {nodes.filter((n) => n.id !== source).map((n) => (
+              <option key={n.id} value={n.id}>{n.label} ({n.id})</option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="btn btn-sm" onClick={runProbe} disabled={probing}>
+          <RefreshCw size={12} aria-hidden="true" className={probing ? "spin" : undefined} />
+          {probing ? "PROBING…" : "PROBE RTT"}
+        </button>
       </div>
-
-      <div
-        className="mono"
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          fontSize: 10.5,
-          color: "var(--fg-secondary)",
-        }}
-      >
-        <span>
-          01 → 02: <strong style={{ color: "var(--spark0)" }}>{formatBps(link.spark0To1Bps)}</strong>
-        </span>
-        <span style={{ color: "var(--fg-muted)" }}>
-          CUMULATIVE {formatBytes(link.totalBytesTransferred, 2)}
-        </span>
-        <span>
-          02 → 01: <strong style={{ color: "var(--spark1)" }}>{formatBps(link.spark1To0Bps)}</strong>
-        </span>
+      {error && <div className="notice-error" role="alert">{error}</div>}
+      <div className="probe-result mono" aria-live="polite">
+        {result ? (
+          <>
+            <strong>{result.source} → {result.target}</strong>
+            <span>Source fabric A: {result.fabricAPingMs === null ? "No RTT" : `${result.fabricAPingMs} ms`}
+              {result.fabricALossPct !== null && ` (${result.fabricALossPct}% loss)`}
+            </span>
+            <span>Source fabric B: {result.fabricBPingMs === null ? "No RTT" : `${result.fabricBPingMs} ms`}
+              {result.fabricBLossPct !== null && ` (${result.fabricBLossPct}% loss)`}
+            </span>
+            <span>LAN: {result.lanPingMs === null ? "No RTT" : `${result.lanPingMs} ms`}</span>
+            <span>Probed {new Date(result.ts).toLocaleString()}</span>
+          </>
+        ) : <span>No probe recorded for {source} → {target}.</span>}
       </div>
     </div>
   );
 }
 
-export function FabricBridge({ spark0, spark1, fabric, probing, onRunProbe }: FabricBridgeProps) {
-  const probe = fabric.lastProbe;
-  const activeGbps = [fabric.linkA, fabric.linkB].reduce(
-    (sum, link) => (link.state === "ACTIVE" ? sum + link.speedGbps : sum),
-    0
-  );
-
+export function FabricBridge({ nodes, probes }: FabricBridgeProps) {
   return (
     <div className="fabric-panel">
       <div className="panel-header">
-        <div className="panel-title">
-          <Zap size={14} color="var(--spark0)" />
-          NODE-TO-NODE FABRIC
-          <span className="nav-badge mono" style={{ color: activeGbps > 0 ? "#bef264" : "#fca5a5" }}>
-            {activeGbps > 0 ? `${activeGbps} GbE ACTIVE` : "NO ACTIVE LINKS"}
-          </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span className="mono" style={{ fontSize: 11, color: "var(--fg-secondary)" }}>
-            LIVE FLOW:{" "}
-            <strong style={{ color: "var(--fg-primary)" }}>
-              {formatBps(fabric.combinedThroughputBps)}
-            </strong>
-          </span>
-          <button type="button" className="btn btn-sm" onClick={onRunProbe} disabled={probing}>
-            <RefreshCw size={12} className={probing ? "spin" : undefined} />
-            {probing ? "PROBING..." : "PROBE FABRIC RTT"}
-          </button>
-        </div>
+        <div className="panel-title"><Zap size={14} color="var(--spark0)" aria-hidden="true" /> NETWORK INTERFACES</div>
+        <span className="nav-badge">NODE-LOCAL COUNTERS</span>
       </div>
-
-      <div className="fabric-grid">
-        <Endpoint node={spark0} side="left" />
-        <div className="fabric-pipes">
-          <Lane name="LINK A" link={fabric.linkA} rttMs={probe?.fabricAPingMs} />
-          <Lane name="LINK B" link={fabric.linkB} rttMs={probe?.fabricBPingMs} />
-        </div>
-        <Endpoint node={spark1} side="right" />
+      <div className="fleet-grid fabric-inventory">
+        {nodes.map((node) => <InterfacePanel key={node.id} node={node} />)}
       </div>
-
-      {probe && (
-        <div
-          className="mono"
-          style={{
-            padding: "7px 16px",
-            borderTop: "1px solid var(--border-hair)",
-            background: "rgba(0,0,0,0.22)",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 18,
-            fontSize: 10.5,
-            color: "var(--fg-secondary)",
-          }}
-        >
-          <span>
-            <Activity size={11} style={{ verticalAlign: "-1px", marginRight: 5 }} />
-            LINK A RTT: <strong style={{ color: "var(--fg-primary)" }}>{probe.fabricAPingMs ?? "--"} ms</strong>{" "}
-            ({probe.fabricALossPct ?? "--"}% loss)
-          </span>
-          <span>
-            LINK B RTT: <strong style={{ color: "var(--fg-primary)" }}>{probe.fabricBPingMs ?? "--"} ms</strong>{" "}
-            ({probe.fabricBLossPct ?? "--"}% loss)
-          </span>
-          <span>
-            LAN PEER RTT: <strong style={{ color: "var(--fg-primary)" }}>{probe.lanPingMs ?? "--"} ms</strong>
-          </span>
-          <span style={{ marginLeft: "auto", color: "var(--fg-muted)" }}>
-            PROBED {new Date(probe.ts).toLocaleTimeString()}
-          </span>
-        </div>
-      )}
+      {nodes.length > 1
+        ? <PeerProbe nodes={nodes} probes={probes} />
+        : <p className="fabric-note">Peer RTT requires a second configured node. Host RTT is shown above.</p>}
     </div>
   );
 }

@@ -1,6 +1,5 @@
 import { Box, FileText, Network, Play, RotateCw, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { NODE_IDS } from "../../shared/fleet-state";
 import type { ExecResult, NodeId, NodeSnapshot } from "../../shared/types";
 import { api, errorMessage, postJson } from "../api";
 import { formatBytes } from "../utils/format";
@@ -24,7 +23,7 @@ const VISIBLE_PORTS = 14;
 const ellipsis = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
 
 export function WorkloadsView({ nodes }: WorkloadsViewProps) {
-  const [filterNode, setFilterNode] = useState<NodeId | "all">("all");
+  const [filterNode, setFilterNode] = useState<NodeId | null>(null);
   const [onlyRunning, setOnlyRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -37,10 +36,12 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
     if (openDrawerKey) drawerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [openDrawerKey]);
 
-  const rows = NODE_IDS.filter((id) => filterNode === "all" || filterNode === id).flatMap((id) =>
-    nodes[id].containers
+  const fleetNodes = Object.values(nodes);
+  const visibleNodes = filterNode === null ? fleetNodes : fleetNodes.filter((node) => node.id === filterNode);
+  const rows = visibleNodes.flatMap((node) =>
+    node.containers
       .filter((c) => !onlyRunning || c.state === "running")
-      .map((container) => ({ node: nodes[id], container }))
+      .map((container) => ({ node, container }))
   );
 
   const runAction = async (nodeId: NodeId, name: string, action: ContainerAction) => {
@@ -61,21 +62,25 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
   };
 
   const openLogs = async (nodeId: NodeId, name: string) => {
-    setLogDrawer({ nodeId, name, logs: "Fetching docker logs over SSH...", loading: true });
+    const request: LogDrawer = { nodeId, name, logs: "Fetching docker logs over SSH...", loading: true };
+    setLogDrawer(request);
+    let logs: string;
     try {
       const res = await api<{ logs: string; truncated: boolean }>(
-        `/api/containers/logs?node=${nodeId}&name=${encodeURIComponent(name)}&tail=180`
+        `/api/containers/logs?node=${encodeURIComponent(nodeId)}&name=${encodeURIComponent(name)}&tail=180`
       );
       const note = res.truncated ? "\n\n[output truncated]" : "";
-      setLogDrawer({ nodeId, name, logs: (res.logs || "(no log output)") + note, loading: false });
+      logs = (res.logs || "(no log output)") + note;
     } catch (err) {
-      setLogDrawer({ nodeId, name, logs: `Could not fetch logs: ${errorMessage(err)}`, loading: false });
+      logs = `Could not fetch logs: ${errorMessage(err)}`;
     }
+    // A later selection (even the same container) or CLOSE supersedes this request.
+    setLogDrawer((current) => current === request ? { ...request, logs, loading: false } : current);
   };
 
-  const filters: { id: NodeId | "all"; label: string }[] = [
-    { id: "all", label: "BOTH NODES" },
-    ...NODE_IDS.map((id) => ({ id, label: nodes[id].label })),
+  const filters: { id: NodeId | null; label: string }[] = [
+    { id: null, label: "ALL NODES" },
+    ...fleetNodes.map(({ id, label }) => ({ id, label })),
   ];
 
   return (
@@ -95,7 +100,7 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
           className="panel"
           style={{ borderColor: "var(--spark0)", scrollMarginTop: 66 }}
         >
-          <div className="panel-header">
+          <div className="panel-header" style={{ flexWrap: "wrap" }}>
             <div className="panel-title">
               <FileText size={14} color="var(--spark0)" />
               CONTAINER LOGS · {nodes[logDrawer.nodeId].label} · {logDrawer.name}
@@ -121,18 +126,19 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
       )}
 
       <div className="panel">
-        <div className="panel-header">
+        <div className="panel-header" style={{ flexWrap: "wrap" }}>
           <div className="panel-title">
             <Box size={14} color="var(--spark0)" />
             DOCKER CONTAINERS
             <span className="nav-badge mono">{rows.length}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
             {filters.map((f) => (
               <button
-                key={f.id}
+                key={f.id ?? "all"}
                 type="button"
                 className={`btn btn-sm ${filterNode === f.id ? "btn-primary" : ""}`}
+                aria-pressed={filterNode === f.id}
                 onClick={() => setFilterNode(f.id)}
               >
                 {f.label}
@@ -141,6 +147,7 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
             <button
               type="button"
               className={`btn btn-sm ${onlyRunning ? "btn-primary" : ""}`}
+              aria-pressed={onlyRunning}
               onClick={() => setOnlyRunning((v) => !v)}
             >
               RUNNING ONLY: {onlyRunning ? "ON" : "OFF"}
@@ -229,12 +236,11 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
         </div>
       </div>
 
-      <div className="dual-grid">
-        {NODE_IDS.map((id) => {
-          const n = nodes[id];
+      <div className="fleet-grid">
+        {visibleNodes.map((n) => {
           return (
-            <div key={id} className="panel">
-              <div className="panel-header">
+            <div key={n.id} className="panel" style={{ minWidth: 0 }}>
+              <div className="panel-header" style={{ flexWrap: "wrap" }}>
                 <div className="panel-title">
                   <Network size={14} color={n.accent} />
                   {n.label} · TOP MEMORY PROCESSES & PORTS
