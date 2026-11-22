@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { NodeId } from "../shared/types";
+import { NODE_IDS } from "../shared/fleet-state";
+import type { FleetTick, NodeId, ServerMessage } from "../shared/types";
 import { FleetBusyError, FleetCollector } from "./collector";
-import { NODE_IDS, NODES, SERVER_PORT } from "./config";
+import { NODES, SERVER_PORT } from "./config";
 import {
   type AccessDenial,
   checkAccess,
@@ -83,24 +84,24 @@ function sanitizeContainerName(name: string): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name) ? name : null;
 }
 
-const collector = new FleetCollector();
 const telemetryClients = new Set<Bun.ServerWebSocket<WsData>>();
 let openTerminals = 0;
 
-collector.subscribe((payload) => {
+function broadcastTick(tick: FleetTick): void {
   if (telemetryClients.size === 0) return;
-  const serialized = JSON.stringify({ type: "fleet_state", payload });
+  const frame = JSON.stringify({ type: "tick", payload: tick } satisfies ServerMessage);
   for (const ws of telemetryClients) {
     if (ws.getBufferedAmount() > MAX_WS_BACKLOG_BYTES) {
       // A stalled tab would otherwise make the server buffer frames forever.
+      // It reconnects and receives a fresh snapshot.
       ws.close(1013, "telemetry backlog");
       continue;
     }
-    ws.send(serialized);
+    ws.send(frame);
   }
-});
+}
 
-await collector.start();
+const collector = await FleetCollector.start(broadcastTick);
 
 async function handleApi(req: Request, url: URL): Promise<Response> {
   const route = `${req.method} ${url.pathname}`;
@@ -265,8 +266,10 @@ const server = Bun.serve<WsData>({
   websocket: {
     open(ws) {
       if (ws.data.kind === "telemetry") {
+        // Flush first so the snapshot and the next tick do not overlap.
+        collector.flush();
+        ws.send(JSON.stringify({ type: "init", payload: collector.getPayload() } satisfies ServerMessage));
         telemetryClients.add(ws);
-        ws.send(JSON.stringify({ type: "fleet_state", payload: collector.getPayload() }));
         return;
       }
 

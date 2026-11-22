@@ -1,93 +1,74 @@
-import type { LocalHostSnapshot } from "../shared/types";
+import fs from "node:fs";
 import os from "node:os";
+import type { LocalHostSnapshot } from "../shared/types";
 
-let cachedChip = "Apple Silicon";
-let cachedOsVersion = "macOS";
-let cachedTailscaleIp = "";
-let prevCpuTimes: { idle: number; total: number } | null = null;
-
-async function runSimple(cmd: string[]): Promise<string> {
+async function commandOutput(cmd: string[]): Promise<string> {
   try {
     const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-    return out.trim();
+    return (await new Response(proc.stdout).text()).trim();
   } catch {
-    return "";
+    return ""; // tool not installed on this platform
   }
 }
 
-export async function initLocalHostMeta(): Promise<void> {
-  const [chip, ver, tsIp] = await Promise.all([
-    runSimple(["sysctl", "-n", "machdep.cpu.brand_string"]),
-    runSimple(["sw_vers", "-productVersion"]),
-    runSimple(["tailscale", "ip", "-4"]),
-  ]);
-  if (chip) cachedChip = chip;
-  if (ver) cachedOsVersion = `macOS ${ver}`;
-  if (tsIp) cachedTailscaleIp = tsIp.split("\n")[0]?.trim() ?? "";
+async function describeOs(): Promise<string> {
+  if (process.platform === "darwin") {
+    const version = await commandOutput(["sw_vers", "-productVersion"]);
+    if (version) return `macOS ${version}`;
+  }
+  if (process.platform === "linux" && fs.existsSync("/etc/os-release")) {
+    const pretty = fs.readFileSync("/etc/os-release", "utf8").match(/^PRETTY_NAME="?([^"\n]+)"?/m);
+    if (pretty) return pretty[1];
+  }
+  return `${os.type()} ${os.release()}`;
 }
 
-function getCpuUsagePct(): number {
-  const cpus = os.cpus();
+const osVersion = describeOs();
+
+async function usedMemoryBytes(totalBytes: number): Promise<number> {
+  if (process.platform === "linux") {
+    const availableKb = fs.readFileSync("/proc/meminfo", "utf8").match(/^MemAvailable:\s+(\d+)/m);
+    if (availableKb) return totalBytes - Number(availableKb[1]) * 1024;
+  }
+  if (process.platform === "darwin") {
+    // os.freemem() counts reclaimable cache as used on macOS. Active + wired +
+    // compressed is what Activity Monitor reports as memory used.
+    const vm = await commandOutput(["vm_stat"]);
+    const pageSize = Number(vm.match(/page size of (\d+) bytes/)?.[1] ?? 0);
+    const pages = (label: string) => Number(vm.match(new RegExp(`${label}:\\s+(\\d+)`))?.[1] ?? 0);
+    const used =
+      (pages("Pages active") + pages("Pages wired down") + pages("Pages occupied by compressor")) *
+      pageSize;
+    if (used > 0) return used;
+  }
+  return totalBytes - os.freemem();
+}
+
+let prevCpu: { idle: number; total: number } | null = null;
+
+/** CPU busy share since the previous call; 0 on the first call. */
+function cpuUsagePct(): number {
   let idle = 0;
   let total = 0;
-  for (const cpu of cpus) {
-    idle += cpu.times.idle;
-    total +=
-      cpu.times.user +
-      cpu.times.nice +
-      cpu.times.sys +
-      cpu.times.idle +
-      cpu.times.irq;
+  for (const { times } of os.cpus()) {
+    idle += times.idle;
+    total += times.user + times.nice + times.sys + times.idle + times.irq;
   }
-  let pct = 0;
-  if (prevCpuTimes) {
-    const dTotal = Math.max(1, total - prevCpuTimes.total);
-    const dIdle = idle - prevCpuTimes.idle;
-    pct = Math.max(0, Math.min(100, Math.round((1 - dIdle / dTotal) * 1000) / 10));
-  }
-  prevCpuTimes = { idle, total };
-  return pct;
+  const prev = prevCpu;
+  prevCpu = { idle, total };
+  if (!prev || total === prev.total) return 0;
+  const busy = 1 - (idle - prev.idle) / (total - prev.total);
+  return Math.max(0, Math.min(100, Math.round(busy * 1000) / 10));
 }
 
 export async function sampleLocalHost(): Promise<LocalHostSnapshot> {
-  const memTotal = os.totalmem();
-  let memUsed = memTotal - os.freemem();
-
-  // More accurate macOS active+wired+compressed via vm_stat
-  const vm = await runSimple(["vm_stat"]);
-  if (vm) {
-    const pageMatch = vm.match(/page size of (\d+) bytes/);
-    const pageSize = pageMatch ? Number(pageMatch[1]) : 16384;
-    const getPages = (label: string) => {
-      const m = vm.match(new RegExp(`${label}:\\s+(\\d+)`));
-      return m ? Number(m[1]) : 0;
-    };
-    const active = getPages("Pages active");
-    const wired = getPages("Pages wired down");
-    const compressed = getPages("Pages occupied by compressor");
-    const computed = (active + wired + compressed) * pageSize;
-    if (computed > 0 && computed <= memTotal) {
-      memUsed = computed;
-    }
-  }
-
-  const load = os.loadavg();
+  const memTotalBytes = os.totalmem();
   return {
     hostname: os.hostname().replace(/\.local$/, ""),
-    chip: cachedChip,
-    osVersion: cachedOsVersion,
-    memTotalBytes: memTotal,
-    memUsedBytes: memUsed,
-    cpuUsagePct: getCpuUsagePct(),
-    loadAvg: [
-      Math.round((load[0] ?? 0) * 100) / 100,
-      Math.round((load[1] ?? 0) * 100) / 100,
-      Math.round((load[2] ?? 0) * 100) / 100,
-    ],
-    uptimeSec: Math.floor(os.uptime()),
-    tailscaleSelfIp: cachedTailscaleIp,
-    lastUpdated: Date.now(),
+    chip: os.cpus()[0]?.model || os.arch(),
+    osVersion: await osVersion,
+    memTotalBytes,
+    memUsedBytes: await usedMemoryBytes(memTotalBytes),
+    cpuUsagePct: cpuUsagePct(),
   };
 }

@@ -1,131 +1,139 @@
-import { useState } from "react";
-import type { ContainerInfo, NodeId, NodeSnapshot } from "../../shared/types";
-import { formatBytes } from "../utils/format";
 import { Box, FileText, Network, Play, RotateCw, Square, X } from "lucide-react";
+import { useState } from "react";
+import { NODE_IDS } from "../../shared/fleet-state";
+import type { ExecResult, NodeId, NodeSnapshot } from "../../shared/types";
+import { api, errorMessage, postJson } from "../api";
+import { formatBytes } from "../utils/format";
 
 interface WorkloadsViewProps {
   nodes: Record<NodeId, NodeSnapshot>;
 }
 
+type ContainerAction = "start" | "stop" | "restart";
+
+interface LogDrawer {
+  nodeId: NodeId;
+  name: string;
+  logs: string;
+  loading: boolean;
+}
+
+const VISIBLE_PROCESSES = 7;
+const VISIBLE_PORTS = 14;
+
+const ellipsis = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
+
 export function WorkloadsView({ nodes }: WorkloadsViewProps) {
   const [filterNode, setFilterNode] = useState<NodeId | "all">("all");
   const [onlyRunning, setOnlyRunning] = useState(false);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [logModal, setLogModal] = useState<{
-    nodeId: NodeId;
-    name: string;
-    logs: string;
-    loading: boolean;
-  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [logDrawer, setLogDrawer] = useState<LogDrawer | null>(null);
 
-  const allContainers: Array<{ nodeId: NodeId; nodeLabel: string; accent: string; c: ContainerInfo }> = [];
-  (["spark-0", "spark-1"] as NodeId[]).forEach((id) => {
-    if (filterNode !== "all" && filterNode !== id) return;
-    const n = nodes[id];
-    for (const c of n.containers) {
-      if (onlyRunning && c.state !== "running") continue;
-      allContainers.push({ nodeId: id, nodeLabel: n.label, accent: n.accent, c });
-    }
-  });
+  const rows = NODE_IDS.filter((id) => filterNode === "all" || filterNode === id).flatMap((id) =>
+    nodes[id].containers
+      .filter((c) => !onlyRunning || c.state === "running")
+      .map((container) => ({ node: nodes[id], container }))
+  );
 
-  const runAction = async (nodeId: NodeId, name: string, action: "start" | "stop" | "restart") => {
-    const key = `${nodeId}:${name}:${action}`;
-    setBusyKey(key);
+  const runAction = async (nodeId: NodeId, name: string, action: ContainerAction) => {
+    setBusy(true);
     try {
-      await fetch("/api/containers/action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nodeId, name, action }),
-      });
+      const res = await postJson<ExecResult>("/api/containers/action", { nodeId, name, action });
+      // docker reports failures on stdout here (stderr is merged) with a non-zero exit.
+      setActionError(
+        res.exitCode === 0
+          ? null
+          : `docker ${action} ${name} on ${nodes[nodeId].label} failed: ${res.stdout.trim() || `exit ${res.exitCode}`}`
+      );
+    } catch (err) {
+      setActionError(`docker ${action} ${name} on ${nodes[nodeId].label} failed: ${errorMessage(err)}`);
     } finally {
-      setBusyKey(null);
+      setBusy(false);
     }
   };
 
   const openLogs = async (nodeId: NodeId, name: string) => {
-    setLogModal({ nodeId, name, logs: "Streaming docker logs over SSH...", loading: true });
+    setLogDrawer({ nodeId, name, logs: "Fetching docker logs over SSH...", loading: true });
     try {
-      const res = await fetch(
-        `/api/containers/logs?node=${encodeURIComponent(nodeId)}&name=${encodeURIComponent(name)}&tail=180`
+      const res = await api<{ logs: string; truncated: boolean }>(
+        `/api/containers/logs?node=${nodeId}&name=${encodeURIComponent(name)}&tail=180`
       );
-      const data = (await res.json()) as { logs?: string; error?: string };
-      setLogModal({
-        nodeId,
-        name,
-        logs: data.logs || data.error || "(no log output)",
-        loading: false,
-      });
+      const note = res.truncated ? "\n\n[output truncated]" : "";
+      setLogDrawer({ nodeId, name, logs: (res.logs || "(no log output)") + note, loading: false });
     } catch (err) {
-      setLogModal({
-        nodeId,
-        name,
-        logs: String(err),
-        loading: false,
-      });
+      setLogDrawer({ nodeId, name, logs: `Could not fetch logs: ${errorMessage(err)}`, loading: false });
     }
   };
 
+  const filters: { id: NodeId | "all"; label: string }[] = [
+    { id: "all", label: "BOTH NODES" },
+    ...NODE_IDS.map((id) => ({ id, label: nodes[id].label })),
+  ];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Log Viewer Drawer (opens right above table for immediate visibility) */}
-      {logModal && (
+      {actionError && (
+        <div className="notice-error" role="alert">
+          <span>{actionError}</span>
+          <button type="button" className="btn btn-sm" onClick={() => setActionError(null)}>
+            <X size={11} /> DISMISS
+          </button>
+        </div>
+      )}
+
+      {/* Sits above the table so opening logs is visible without scrolling. */}
+      {logDrawer && (
         <div className="panel" style={{ borderColor: "var(--spark0)" }}>
           <div className="panel-header">
             <div className="panel-title">
               <FileText size={14} color="var(--spark0)" />
-              CONTAINER LOGS · {nodes[logModal.nodeId].label} · {logModal.name}
+              CONTAINER LOGS · {nodes[logDrawer.nodeId].label} · {logDrawer.name}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <button
+                type="button"
                 className="btn btn-sm"
-                onClick={() => openLogs(logModal.nodeId, logModal.name)}
-                disabled={logModal.loading}
+                onClick={() => openLogs(logDrawer.nodeId, logDrawer.name)}
+                disabled={logDrawer.loading}
               >
                 <RotateCw size={11} /> REFRESH
               </button>
-              <button className="btn btn-sm" onClick={() => setLogModal(null)}>
+              <button type="button" className="btn btn-sm" onClick={() => setLogDrawer(null)}>
                 <X size={11} /> CLOSE
               </button>
             </div>
           </div>
           <div className="panel-body">
-            <pre className="log-pre">{logModal.logs}</pre>
+            <pre className="log-pre">{logDrawer.logs}</pre>
           </div>
         </div>
       )}
 
-      {/* Docker Containers Panel */}
       <div className="panel">
         <div className="panel-header">
           <div className="panel-title">
             <Box size={14} color="var(--spark0)" />
-            FLEET DOCKER CONTAINERS
-            <span className="nav-badge mono">{allContainers.length}</span>
+            DOCKER CONTAINERS
+            <span className="nav-badge mono">{rows.length}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {filters.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={`btn btn-sm ${filterNode === f.id ? "btn-primary" : ""}`}
+                onClick={() => setFilterNode(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
             <button
-              className={`btn btn-sm ${filterNode === "all" ? "btn-primary" : ""}`}
-              onClick={() => setFilterNode("all")}
-            >
-              BOTH SPARKS
-            </button>
-            <button
-              className={`btn btn-sm ${filterNode === "spark-0" ? "btn-primary" : ""}`}
-              onClick={() => setFilterNode("spark-0")}
-            >
-              SPARK-01
-            </button>
-            <button
-              className={`btn btn-sm ${filterNode === "spark-1" ? "btn-primary" : ""}`}
-              onClick={() => setFilterNode("spark-1")}
-            >
-              SPARK-02
-            </button>
-            <button
+              type="button"
               className={`btn btn-sm ${onlyRunning ? "btn-primary" : ""}`}
               onClick={() => setOnlyRunning((v) => !v)}
             >
-              {onlyRunning ? "RUNNING ONLY: ON" : "RUNNING ONLY: OFF"}
+              RUNNING ONLY: {onlyRunning ? "ON" : "OFF"}
             </button>
           </div>
         </div>
@@ -144,58 +152,52 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
               </tr>
             </thead>
             <tbody>
-              {allContainers.map(({ nodeId, nodeLabel, accent, c }) => {
+              {rows.map(({ node, container: c }) => {
                 const running = c.state === "running";
                 return (
-                  <tr key={`${nodeId}-${c.id}`}>
+                  <tr key={`${node.id}-${c.id}`}>
                     <td>
-                      <span style={{ color: accent, fontWeight: 600 }}>
-                        {nodeLabel.split(" // ")[0]}
-                      </span>
+                      <span style={{ color: node.accent, fontWeight: 600 }}>{node.label}</span>
                     </td>
                     <td style={{ fontWeight: 600 }}>{c.name}</td>
-                    <td style={{ color: "var(--fg-secondary)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {c.image}
-                    </td>
+                    <td style={{ color: "var(--fg-secondary)", maxWidth: 260, ...ellipsis }}>{c.image}</td>
                     <td>
-                      <span className={`state-pill ${running ? "running" : "exited"}`}>
-                        {c.state}
-                      </span>
+                      <span className={`state-pill ${running ? "running" : "exited"}`}>{c.state}</span>
                     </td>
                     <td style={{ color: "var(--fg-secondary)" }}>{c.status}</td>
-                    <td style={{ color: "var(--teal)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {c.ports || "host / none"}
-                    </td>
+                    <td style={{ color: "var(--teal)", maxWidth: 220, ...ellipsis }}>{c.ports || "--"}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <div style={{ display: "inline-flex", gap: 5 }}>
-                        <button
-                          className="btn btn-sm"
-                          onClick={() => openLogs(nodeId, c.name)}
-                        >
+                        <button type="button" className="btn btn-sm" onClick={() => openLogs(node.id, c.name)}>
                           <FileText size={11} /> LOGS
                         </button>
                         {running ? (
                           <>
                             <button
+                              type="button"
                               className="btn btn-sm"
-                              disabled={busyKey !== null}
-                              onClick={() => runAction(nodeId, c.name, "restart")}
+                              title="Restart"
+                              disabled={busy}
+                              onClick={() => runAction(node.id, c.name, "restart")}
                             >
                               <RotateCw size={11} />
                             </button>
                             <button
+                              type="button"
                               className="btn btn-sm btn-danger"
-                              disabled={busyKey !== null}
-                              onClick={() => runAction(nodeId, c.name, "stop")}
+                              title="Stop"
+                              disabled={busy}
+                              onClick={() => runAction(node.id, c.name, "stop")}
                             >
                               <Square size={11} />
                             </button>
                           </>
                         ) : (
                           <button
+                            type="button"
                             className="btn btn-sm"
-                            disabled={busyKey !== null}
-                            onClick={() => runAction(nodeId, c.name, "start")}
+                            disabled={busy}
+                            onClick={() => runAction(node.id, c.name, "start")}
                           >
                             <Play size={11} /> START
                           </button>
@@ -205,10 +207,10 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
                   </tr>
                 );
               })}
-              {allContainers.length === 0 && (
+              {rows.length === 0 && (
                 <tr>
                   <td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--fg-muted)" }}>
-                    No containers match current filter.
+                    No containers match the current filter.
                   </td>
                 </tr>
               )}
@@ -217,9 +219,8 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
         </div>
       </div>
 
-      {/* Dual-Node Process + Listening Ports Matrix */}
       <div className="dual-grid">
-        {(["spark-0", "spark-1"] as NodeId[]).map((id) => {
+        {NODE_IDS.map((id) => {
           const n = nodes[id];
           return (
             <div key={id} className="panel">
@@ -244,15 +245,13 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {n.topProcesses.slice(0, 7).map((p) => (
+                    {n.topProcesses.slice(0, VISIBLE_PROCESSES).map((p) => (
                       <tr key={p.pid}>
                         <td style={{ color: n.accent }}>{p.pid}</td>
                         <td style={{ fontWeight: 600 }}>{p.comm}</td>
                         <td>{p.cpuPct.toFixed(1)}%</td>
                         <td>{formatBytes(p.rssBytes, 1)}</td>
-                        <td style={{ color: "var(--fg-secondary)", maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {p.args}
-                        </td>
+                        <td style={{ color: "var(--fg-secondary)", maxWidth: 250, ...ellipsis }}>{p.args}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -268,7 +267,7 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
                   gap: 6,
                 }}
               >
-                {n.ports.slice(0, 14).map((p) => (
+                {n.ports.slice(0, VISIBLE_PORTS).map((p) => (
                   <span
                     key={`${p.addr}:${p.port}`}
                     className="mono"
@@ -280,10 +279,14 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
                       color: "var(--fg-secondary)",
                     }}
                   >
-                    <strong style={{ color: "var(--fg-primary)" }}>:{p.port}</strong>{" "}
-                    {p.addr} ({p.process})
+                    <strong style={{ color: "var(--fg-primary)" }}>:{p.port}</strong> {p.addr} ({p.process})
                   </span>
                 ))}
+                {n.ports.length > VISIBLE_PORTS && (
+                  <span className="mono" style={{ fontSize: 10.5, padding: "3px 7px", color: "var(--fg-muted)" }}>
+                    +{n.ports.length - VISIBLE_PORTS} more
+                  </span>
+                )}
               </div>
             </div>
           );

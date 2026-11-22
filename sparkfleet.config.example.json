@@ -5,16 +5,12 @@
       "sshHost": "spark-1",
       "label": "SPARK-01",
       "role": "RANK 0 · PRIMARY",
-      "lanIp": "192.168.1.101",
-      "fabricIps": ["192.168.100.2", "192.168.101.2"],
       "accent": "#76B900"
     },
     "spark-1": {
       "sshHost": "spark-2",
       "label": "SPARK-02",
       "role": "RANK 1 · PEER",
-      "lanIp": "192.168.1.102",
-      "fabricIps": ["192.168.100.1", "192.168.101.1"],
       "accent": "#38BDF8"
     }
   }

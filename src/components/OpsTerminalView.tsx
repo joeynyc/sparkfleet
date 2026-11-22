@@ -1,22 +1,27 @@
-import { useEffect, useRef, useState } from "react";
-import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import type { ExecResult, NodeId, NodeSnapshot } from "../../shared/types";
 import { Play, Radio, RotateCw, Terminal as TermIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { NODE_IDS } from "../../shared/fleet-state";
+import type { ExecResult, NodeId, NodeSnapshot } from "../../shared/types";
+import { errorMessage, postJson } from "../api";
+
+type TerminalFrame = { type: "output"; data: string } | { type: "exit"; code: number };
 
 interface SshTerminalPaneProps {
   node: NodeSnapshot;
-  broadcastSignal: { seq: number; text: string } | null;
+  /** A line to type into this terminal; `seq` changes on every send. */
+  broadcast: { seq: number; text: string } | null;
 }
 
-function SshTerminalPane({ node, broadcastSignal }: SshTerminalPaneProps) {
+function SshTerminalPane({ node, broadcast }: SshTerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const termRef = useRef<XTerm | null>(null);
   const [status, setStatus] = useState<"connecting" | "live" | "closed">("connecting");
-  const [reconnectSeq, setReconnectSeq] = useState(0);
+  const [session, setSession] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `session` is the reconnect trigger
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -41,100 +46,70 @@ function SshTerminalPane({ node, broadcastSignal }: SshTerminalPaneProps) {
     term.loadAddon(fit);
     term.open(el);
     fit.fit();
-    termRef.current = term;
 
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${window.location.host}/ws/terminal?node=${node.id}`);
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${scheme}://${window.location.host}/ws/terminal?node=${node.id}`);
     wsRef.current = ws;
     setStatus("connecting");
 
-    const sendResize = () => {
-      try {
-        fit.fit();
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-        }
-      } catch {
-        // ignore
+    const syncSize = () => {
+      fit.fit();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
       }
     };
 
     ws.onopen = () => {
       setStatus("live");
-      sendResize();
+      syncSize();
     };
-
     ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data) as { type: string; data?: string; code?: number };
-        if (msg.type === "output" && msg.data) {
-          term.write(msg.data);
-        } else if (msg.type === "exit") {
-          term.writeln(`\r\n\x1b[31m[SSH session exited with code ${msg.code ?? 0}]\x1b[0m`);
-          setStatus("closed");
-        }
-      } catch {
-        // ignore
+      const frame = JSON.parse(ev.data) as TerminalFrame;
+      if (frame.type === "output") {
+        term.write(frame.data);
+      } else {
+        term.writeln(`\r\n\x1b[31m[SSH session exited with code ${frame.code}]\x1b[0m`);
       }
     };
+    ws.onclose = () => setStatus("closed");
 
-    ws.onclose = () => {
-      setStatus("closed");
-    };
-
-    const dataDisp = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "input", data }));
-      }
+    const input = term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
     });
-
-    const ro = new ResizeObserver(() => sendResize());
-    ro.observe(el);
+    const resizeObserver = new ResizeObserver(syncSize);
+    resizeObserver.observe(el);
 
     return () => {
-      ro.disconnect();
-      dataDisp.dispose();
+      resizeObserver.disconnect();
+      input.dispose();
       ws.close();
       term.dispose();
       wsRef.current = null;
-      termRef.current = null;
     };
-  }, [node.id, node.accent, reconnectSeq]);
+  }, [node.id, node.accent, session]);
 
   useEffect(() => {
-    if (!broadcastSignal || !broadcastSignal.text) return;
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "input", data: broadcastSignal.text }));
+    if (broadcast && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "input", data: broadcast.text }));
     }
-  }, [broadcastSignal]);
+  }, [broadcast]);
+
+  const statusColor =
+    status === "live" ? "var(--spark0)" : status === "connecting" ? "var(--amber)" : "var(--crimson)";
 
   return (
     <div className="panel">
       <div className="panel-header">
         <div className="panel-title">
           <TermIcon size={14} color={node.accent} />
-          {node.label} · INTERACTIVE PTY ({node.sshHost})
+          {node.label} · SSH ({node.sshHost})
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            className="mono"
-            style={{
-              fontSize: 10.5,
-              color:
-                status === "live"
-                  ? "var(--spark0)"
-                  : status === "connecting"
-                    ? "var(--amber)"
-                    : "var(--crimson)",
-            }}
-          >
+          <span className="mono" style={{ fontSize: 10.5, color: statusColor }}>
             ● {status.toUpperCase()}
           </span>
-          <button
-            className="btn btn-sm"
-            onClick={() => setReconnectSeq((s) => s + 1)}
-          >
+          <button type="button" className="btn btn-sm" onClick={() => setSession((s) => s + 1)}>
             <RotateCw size={11} /> RECONNECT
           </button>
         </div>
@@ -144,76 +119,75 @@ function SshTerminalPane({ node, broadcastSignal }: SshTerminalPaneProps) {
   );
 }
 
-interface OpsTerminalViewProps {
-  nodes: Record<NodeId, NodeSnapshot>;
-}
-
 const PRESET_COMMANDS = [
   { label: "nvidia-smi", cmd: "nvidia-smi" },
   { label: "RDMA Links", cmd: "rdma link && ibv_devinfo -l" },
-  { label: "NVMe Disk Top", cmd: "df -h / && du -sh ~/* 2>/dev/null | sort -hr | head -n 10" },
+  { label: "Disk Usage", cmd: "df -h / && du -sh ~/* 2>/dev/null | sort -hr | head -n 10" },
   { label: "Docker Running", cmd: "docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}'" },
   { label: "Memory Detail", cmd: "free -h && ps -eo pid,pcpu,pmem,rss,comm --sort=-rss | head -n 8" },
 ];
 
-export function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
-  const [command, setCommand] = useState("nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu,power.draw,clocks.gr --format=csv");
-  const [targets, setTargets] = useState<NodeId[]>(["spark-0", "spark-1"]);
+const DEFAULT_COMMAND =
+  "nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu,power.draw,clocks.gr --format=csv";
+
+interface OpsTerminalViewProps {
+  nodes: Record<NodeId, NodeSnapshot>;
+}
+
+export default function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
+  const [command, setCommand] = useState(DEFAULT_COMMAND);
+  const [targets, setTargets] = useState<NodeId[]>([...NODE_IDS]);
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<ExecResult[]>([]);
+  const [execError, setExecError] = useState<string | null>(null);
   const [syncInput, setSyncInput] = useState("");
-  const [broadcastSig, setBroadcastSig] = useState<{ seq: number; text: string } | null>(null);
+  const [broadcast, setBroadcast] = useState<{ seq: number; text: string } | null>(null);
 
-  const toggleTarget = (id: NodeId) => {
-    setTargets((prev) =>
-      prev.includes(id) ? (prev.length > 1 ? prev.filter((x) => x !== id) : prev) : [...prev, id]
-    );
-  };
+  // At least one node stays selected.
+  const toggleTarget = (id: NodeId) =>
+    setTargets((prev) => {
+      if (!prev.includes(id)) return [...prev, id];
+      return prev.length > 1 ? prev.filter((x) => x !== id) : prev;
+    });
 
-  const executeBroadcast = async (overrideCmd?: string) => {
-    const cmd = (overrideCmd ?? command).trim();
-    if (!cmd) return;
-    if (overrideCmd) setCommand(overrideCmd);
+  const execute = async (cmd: string) => {
+    if (!cmd.trim()) return;
+    setCommand(cmd);
     setRunning(true);
     try {
-      const res = await fetch("/api/exec", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nodes: targets, command: cmd }),
-      });
-      const data = (await res.json()) as { results?: ExecResult[] };
-      setResults(data.results ?? []);
+      const res = await postJson<{ results: ExecResult[] }>("/api/exec", { nodes: targets, command: cmd });
+      setResults(res.results);
+      setExecError(null);
+    } catch (err) {
+      setExecError(errorMessage(err));
     } finally {
       setRunning(false);
     }
   };
 
-  const sendToBothPtys = () => {
+  const sendToBothTerminals = () => {
     if (!syncInput.trim()) return;
-    setBroadcastSig((prev) => ({
-      seq: (prev?.seq ?? 0) + 1,
-      text: `${syncInput}\r`,
-    }));
+    setBroadcast((prev) => ({ seq: (prev?.seq ?? 0) + 1, text: `${syncInput}\r` }));
     setSyncInput("");
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Fleet Broadcast Command Runner */}
       <div className="panel">
         <div className="panel-header">
           <div className="panel-title">
             <Radio size={14} color="var(--spark0)" />
-            PARALLEL FLEET COMMAND RUNNER
+            PARALLEL COMMAND RUNNER
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {(["spark-0", "spark-1"] as NodeId[]).map((id) => (
+            {NODE_IDS.map((id) => (
               <button
                 key={id}
+                type="button"
                 className={`btn btn-sm ${targets.includes(id) ? "btn-primary" : ""}`}
                 onClick={() => toggleTarget(id)}
               >
-                {nodes[id].label.split(" // ")[0]}
+                {nodes[id].label}
               </button>
             ))}
           </div>
@@ -223,72 +197,83 @@ export function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
           <div style={{ display: "flex", gap: 8 }}>
             <input
               className="cmd-input"
+              aria-label="Command to run on the selected nodes"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && executeBroadcast()}
-              placeholder="Run command simultaneously on selected DGX Sparks..."
+              onKeyDown={(e) => e.key === "Enter" && execute(command)}
+              placeholder="Run a command on the selected nodes..."
             />
-            <button
-              className="btn btn-primary"
-              onClick={() => executeBroadcast()}
-              disabled={running}
-            >
+            <button type="button" className="btn btn-primary" onClick={() => execute(command)} disabled={running}>
               <Play size={12} /> {running ? "RUNNING..." : "EXEC ON FLEET"}
             </button>
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {PRESET_COMMANDS.map((p) => (
+            {PRESET_COMMANDS.map((preset) => (
               <button
-                key={p.label}
+                key={preset.label}
+                type="button"
                 className="btn btn-sm"
                 disabled={running}
-                onClick={() => executeBroadcast(p.cmd)}
+                onClick={() => execute(preset.cmd)}
               >
-                {p.label}
+                {preset.label}
               </button>
             ))}
           </div>
 
+          {execError && (
+            <div className="notice-error" role="alert">
+              Command was not run: {execError}
+            </div>
+          )}
+
           {results.length > 0 && (
             <div className="dual-grid">
-              {results.map((r) => (
-                <div key={r.nodeId} className="telemetry-box">
-                  <div className="telemetry-box-head">
-                    <span className="telemetry-box-label" style={{ color: nodes[r.nodeId].accent }}>
-                      {nodes[r.nodeId].label} ({r.sshHost})
-                    </span>
-                    <span className="mono" style={{ fontSize: 10.5, color: r.exitCode === 0 ? "var(--spark0)" : "var(--crimson)" }}>
-                      EXIT {r.exitCode} · {r.durationMs}ms
-                    </span>
+              {results.map((r) => {
+                const flags = [r.timedOut && "TIMED OUT", r.truncated && "OUTPUT TRUNCATED"].filter(Boolean);
+                const ok = r.exitCode === 0 && flags.length === 0;
+                return (
+                  <div key={r.nodeId} className="telemetry-box">
+                    <div className="telemetry-box-head">
+                      <span className="telemetry-box-label" style={{ color: nodes[r.nodeId].accent }}>
+                        {nodes[r.nodeId].label} ({r.sshHost})
+                      </span>
+                      <span
+                        className="mono"
+                        style={{ fontSize: 10.5, color: ok ? "var(--spark0)" : "var(--crimson)" }}
+                      >
+                        {[`EXIT ${r.exitCode}`, `${r.durationMs}ms`, ...flags].join(" · ")}
+                      </span>
+                    </div>
+                    <pre className="log-pre" style={{ maxHeight: 220 }}>
+                      {r.stdout || r.stderr || "(no output)"}
+                    </pre>
                   </div>
-                  <pre className="log-pre" style={{ maxHeight: 220 }}>
-                    {r.stdout || r.stderr || "(no output)"}
-                  </pre>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       </div>
 
-      {/* Synchronized PTY Broadcast Input */}
       <div className="panel">
         <div className="panel-header">
           <div className="panel-title">
             <TermIcon size={14} color="var(--spark1)" />
-            DUAL-NODE INTERACTIVE SSH TERMINALS
+            INTERACTIVE SSH TERMINALS
           </div>
           <div style={{ display: "flex", gap: 8, width: "min(480px, 55%)" }}>
             <input
               className="cmd-input"
+              aria-label="Line to send to both terminals"
               style={{ padding: "5px 10px", fontSize: 11.5 }}
               value={syncInput}
               onChange={(e) => setSyncInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendToBothPtys()}
-              placeholder="Broadcast line to BOTH live PTYs (Enter)..."
+              onKeyDown={(e) => e.key === "Enter" && sendToBothTerminals()}
+              placeholder="Send a line to BOTH terminals (Enter)..."
             />
-            <button className="btn btn-sm btn-primary" onClick={sendToBothPtys}>
+            <button type="button" className="btn btn-sm btn-primary" onClick={sendToBothTerminals}>
               SYNC SEND
             </button>
           </div>
@@ -296,8 +281,9 @@ export function OpsTerminalView({ nodes }: OpsTerminalViewProps) {
       </div>
 
       <div className="dual-grid">
-        <SshTerminalPane node={nodes["spark-0"]} broadcastSignal={broadcastSig} />
-        <SshTerminalPane node={nodes["spark-1"]} broadcastSignal={broadcastSig} />
+        {NODE_IDS.map((id) => (
+          <SshTerminalPane key={id} node={nodes[id]} broadcast={broadcast} />
+        ))}
       </div>
     </div>
   );

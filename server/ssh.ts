@@ -12,6 +12,13 @@ const SSH_OPTIONS = [
   "ServerAliveInterval=5",
   "-o",
   "ServerAliveCountMax=2",
+  // One authenticated connection per node, shared by telemetry and every command.
+  "-o",
+  "ControlMaster=auto",
+  "-o",
+  "ControlPath=~/.ssh/sparkfleet-%C",
+  "-o",
+  "ControlPersist=60",
 ];
 
 const SAFE_SSH_HOST = /^[A-Za-z0-9_][A-Za-z0-9._@-]*$/;

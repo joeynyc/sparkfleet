@@ -2,12 +2,10 @@ export type NodeId = "spark-0" | "spark-1";
 
 export interface NodeConfig {
   id: NodeId;
+  /** Alias from ~/.ssh/config, or a hostname. */
   sshHost: string;
   label: string;
   role: string;
-  lanIp: string;
-  tailscaleIp: string;
-  fabricIps: string[];
   accent: string;
 }
 
@@ -15,36 +13,28 @@ export interface GpuProcess {
   pid: number;
   name: string;
   memoryMiB: number;
-  cmdline?: string;
+  cmdline: string;
 }
+
+export type InterfaceRole = "lan" | "fabric-a" | "fabric-b";
 
 export interface NetworkInterfaceMetric {
   name: string;
-  role: "fabric-a" | "fabric-b" | "lan" | "tailscale" | "other";
+  role: InterfaceRole;
   ip: string;
+  /** Network in CIDR form, e.g. `10.0.0.0/24`. */
+  subnet: string;
   operstate: string;
+  /** 0 when the link is down or the driver does not report a speed. */
   speedMbps: number;
   rxBytes: number;
   txBytes: number;
   rxBps: number;
   txBps: number;
-  rxErrors: number;
-  txErrors: number;
-}
-
-export interface RdmaLinkState {
-  hca: string;
-  netdev: string;
-  state: string;
-  physicalState: string;
-  portXmitData: number;
-  portRcvData: number;
-  errors: number;
 }
 
 export interface ThermalSensor {
   label: string;
-  category: "gpu" | "soc" | "nic" | "nvme" | "wifi";
   tempC: number;
 }
 
@@ -55,13 +45,11 @@ export interface ContainerInfo {
   state: string;
   status: string;
   ports: string;
-  created: string;
 }
 
 export interface TopProcess {
   pid: number;
   cpuPct: number;
-  memPct: number;
   rssBytes: number;
   comm: string;
   args: string;
@@ -71,25 +59,14 @@ export interface ListeningPort {
   addr: string;
   port: number;
   process: string;
-  pid: number | null;
 }
 
-export interface NodeSnapshot {
-  id: NodeId;
-  sshHost: string;
-  label: string;
-  role: string;
-  accent: string;
-  connected: boolean;
-  error: string | null;
-  lastUpdated: number;
-  sshRttMs: number | null;
+/** One sample from the agent running on a node (see server/agent.py). */
+export interface NodeTelemetry {
   hostname: string;
-  kernel: string;
   uptimeSec: number;
   loadAvg: [number, number, number];
   cpu: {
-    cores: number;
     usagePct: number;
     perCorePct: number[];
     freqMhz: number[];
@@ -100,8 +77,6 @@ export interface NodeSnapshot {
     usedBytes: number;
     availableBytes: number;
     cachedBytes: number;
-    buffersBytes: number;
-    swapTotalBytes: number;
     swapUsedBytes: number;
     gpuAllocatedBytes: number;
   };
@@ -109,8 +84,8 @@ export interface NodeSnapshot {
     name: string;
     driver: string;
     utilPct: number;
-    memUtilPct: number;
     tempC: number;
+    /** Degrees of headroom before the GPU's thermal limit, when the driver reports it. */
     tLimitMarginC: number | null;
     powerW: number;
     clockGrMhz: number;
@@ -120,38 +95,42 @@ export interface NodeSnapshot {
   thermals: ThermalSensor[];
   fansRpm: [number, number];
   disk: {
-    mount: string;
     device: string;
     totalBytes: number;
     usedBytes: number;
+    /** Space an unprivileged process can still write; excludes root-reserved blocks. */
     availBytes: number;
+    /** used / (used + avail), the figure `df` prints. */
     usedPct: number;
     readBps: number;
     writeBps: number;
   };
   interfaces: NetworkInterfaceMetric[];
-  rdmaLinks: RdmaLinkState[];
   containers: ContainerInfo[];
   topProcesses: TopProcess[];
   ports: ListeningPort[];
 }
 
+export interface NodeSnapshot extends NodeTelemetry {
+  id: NodeId;
+  sshHost: string;
+  label: string;
+  role: string;
+  accent: string;
+  connected: boolean;
+  error: string | null;
+  /** ICMP round trip from the control host to the node's LAN address. */
+  hostRttMs: number | null;
+}
+
 export interface HistoryPoint {
-  ts: number;
   gpuUtil: number;
   gpuPowerW: number;
   gpuTempC: number;
-  gpuClockMhz: number;
   cpuUtil: number;
   memUsedGb: number;
-  gpuMemGb: number;
-  fabricRxBps: number;
-  fabricTxBps: number;
-  lanRxBps: number;
-  lanTxBps: number;
-  diskReadBps: number;
-  diskWriteBps: number;
-  fanRpmAvg: number;
+  /** Receive plus transmit across both fabric links. */
+  fabricBps: number;
 }
 
 export interface LocalHostSnapshot {
@@ -161,31 +140,17 @@ export interface LocalHostSnapshot {
   memTotalBytes: number;
   memUsedBytes: number;
   cpuUsagePct: number;
-  loadAvg: [number, number, number];
-  uptimeSec: number;
-  tailscaleSelfIp: string;
-  lastUpdated: number;
 }
 
-export interface FabricTelemetry {
-  linkA: {
-    subnet: string;
-    speedGbps: number;
-    state: "ACTIVE" | "DEGRADED" | "DOWN";
-    spark0To1Bps: number;
-    spark1To0Bps: number;
-    totalBytesTransferred: number;
-  };
-  linkB: {
-    subnet: string;
-    speedGbps: number;
-    state: "ACTIVE" | "DEGRADED" | "DOWN";
-    spark0To1Bps: number;
-    spark1To0Bps: number;
-    totalBytesTransferred: number;
-  };
-  combinedThroughputBps: number;
-  lastProbe: FabricProbeResult | null;
+export interface FabricLink {
+  subnet: string;
+  speedGbps: number;
+  state: "ACTIVE" | "DEGRADED" | "DOWN";
+  spark0To1Bps: number;
+  spark1To0Bps: number;
+  totalBytesTransferred: number;
+  /** Interface name on spark-0 and spark-1; empty when not detected. */
+  netdevs: [string, string];
 }
 
 export interface FabricProbeResult {
@@ -193,30 +158,48 @@ export interface FabricProbeResult {
   fabricAPingMs: number | null;
   fabricBPingMs: number | null;
   lanPingMs: number | null;
-  macToSpark0Ms: number | null;
-  macToSpark1Ms: number | null;
   fabricALossPct: number | null;
   fabricBLossPct: number | null;
-  rdmaSummary: string;
+}
+
+export interface FabricTelemetry {
+  linkA: FabricLink;
+  linkB: FabricLink;
+  combinedThroughputBps: number;
+  lastProbe: FabricProbeResult | null;
 }
 
 export interface AlertItem {
   id: string;
-  severity: "critical" | "warn" | "info";
-  nodeId: NodeId | "cluster";
+  severity: "critical" | "warn";
+  kind: "offline" | "disk" | "thermal" | "memory";
+  nodeId: NodeId;
   title: string;
   detail: string;
   metric: string;
 }
 
 export interface FleetStatePayload {
-  ts: number;
   nodes: Record<NodeId, NodeSnapshot>;
   history: Record<NodeId, HistoryPoint[]>;
   fabric: FabricTelemetry;
   localHost: LocalHostSnapshot;
   alerts: AlertItem[];
 }
+
+/** A one-second update: current state plus only the history points added since the last tick. */
+export interface FleetTick {
+  nodes: Record<NodeId, NodeSnapshot>;
+  points: Record<NodeId, HistoryPoint[]>;
+  fabric: FabricTelemetry;
+  localHost: LocalHostSnapshot;
+  alerts: AlertItem[];
+}
+
+/** Telemetry WebSocket protocol: one `init` on connect, then a `tick` per second. */
+export type ServerMessage =
+  | { type: "init"; payload: FleetStatePayload }
+  | { type: "tick"; payload: FleetTick };
 
 export interface ExecResult {
   nodeId: NodeId;

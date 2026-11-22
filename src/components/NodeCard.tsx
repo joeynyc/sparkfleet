@@ -54,7 +54,7 @@ export function NodeCard({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <button className="btn btn-sm" onClick={onOpenTerminal}>
+          <button type="button" className="btn btn-sm" onClick={onOpenTerminal}>
             <Terminal size={12} /> SSH
           </button>
         </div>
@@ -76,12 +76,12 @@ export function NodeCard({
       )}
 
       <div className="node-body">
-        {/* GB10 GPU Hero + Power Oscilloscope */}
+        {/* GPU utilization and power */}
         <div className="node-hero-grid">
           <div className="telemetry-box">
             <div className="telemetry-box-head">
               <span className="telemetry-box-label">
-                {node.gpu.name} · SM UTILIZATION
+                {node.gpu.name} · UTILIZATION
               </span>
               <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>
                 {node.gpu.pstate} · DRV {node.gpu.driver || "--"}
@@ -129,7 +129,7 @@ export function NodeCard({
 
           <div className="telemetry-box">
             <div className="telemetry-box-head">
-              <span className="telemetry-box-label">BOARD POWER DRAW</span>
+              <span className="telemetry-box-label">GPU POWER DRAW</span>
               <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>
                 {node.fansRpm[0] + node.fansRpm[1] > 0
                   ? `FAN ${node.fansRpm[0]}/${node.fansRpm[1]} RPM`
@@ -151,7 +151,7 @@ export function NodeCard({
                 </div>
               </div>
               <div>
-                <div className="mini-stat-label">NVME R / W</div>
+                <div className="mini-stat-label">DISK R / W</div>
                 <div className="mini-stat-val" style={{ fontSize: 11 }}>
                   {formatDiskBps(node.disk.readBps)} / {formatDiskBps(node.disk.writeBps)}
                 </div>
@@ -160,11 +160,11 @@ export function NodeCard({
           </div>
         </div>
 
-        {/* Unified 128GB UMA Memory Breakdown */}
+        {/* Unified memory breakdown */}
         <div className="telemetry-box">
           <div className="telemetry-box-head">
             <span className="telemetry-box-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <MemoryStick size={12} /> 128GB LPDDR5X UNIFIED MEMORY (UMA)
+              <MemoryStick size={12} /> UNIFIED MEMORY
             </span>
             <span className="mono" style={{ fontSize: 11.5 }}>
               <strong>{formatBytes(node.memory.usedBytes, 1)}</strong> /{" "}
@@ -214,11 +214,11 @@ export function NodeCard({
           </div>
         </div>
 
-        {/* 20-Core Grace ARM CPU Matrix */}
+        {/* Per-core CPU matrix */}
         <div className="telemetry-box">
           <div className="telemetry-box-head">
             <span className="telemetry-box-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <Cpu size={12} /> GRACE 20-CORE ARMv9 (10× X925 + 10× A725)
+              <Cpu size={12} /> CPU · {node.cpu.perCorePct.length} CORES
             </span>
             <span className="mono" style={{ fontSize: 11.5 }}>
               <strong>{node.cpu.usagePct.toFixed(1)}%</strong>
@@ -229,30 +229,29 @@ export function NodeCard({
           </div>
 
           <div className="core-matrix">
-            {(node.cpu.perCorePct.length > 0 ? node.cpu.perCorePct : new Array(20).fill(0)).map(
-              (pct, idx) => {
-                const hot = pct > 75 ? "#ef4444" : pct > 40 ? "#f59e0b" : node.accent;
-                return (
-                  <div
-                    key={idx}
-                    className="core-cell"
-                    title={`Core ${idx}: ${pct.toFixed(1)}% @ ${node.cpu.freqMhz[idx] ?? 0} MHz`}
-                  >
-                    <div className="core-bar-bg">
-                      <div
-                        className="core-bar-fill"
-                        style={{ height: `${Math.max(4, Math.min(100, pct))}%`, background: hot }}
-                      />
-                    </div>
-                    <span className="core-id">C{idx < 10 ? `0${idx}` : idx}</span>
+            {node.cpu.perCorePct.map((pct, core) => {
+              const hot = pct > 75 ? "#ef4444" : pct > 40 ? "#f59e0b" : node.accent;
+              const id = `C${String(core).padStart(2, "0")}`;
+              return (
+                <div
+                  key={id}
+                  className="core-cell"
+                  title={`Core ${core}: ${pct.toFixed(1)}% @ ${node.cpu.freqMhz[core] ?? 0} MHz`}
+                >
+                  <div className="core-bar-bg">
+                    <div
+                      className="core-bar-fill"
+                      style={{ height: `${Math.max(4, Math.min(100, pct))}%`, background: hot }}
+                    />
                   </div>
-                );
-              }
-            )}
+                  <span className="core-id">{id}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        {/* Thermals + Fans + NVMe Storage Pressure */}
+        {/* Thermals, fans and root disk pressure */}
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 10 }}>
           <div className="telemetry-box">
             <div className="telemetry-box-head">
@@ -279,9 +278,9 @@ export function NodeCard({
           <div className="telemetry-box">
             <div className="telemetry-box-head">
               <span className="telemetry-box-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <HardDrive size={12} /> NVME STORAGE
+                <HardDrive size={12} /> ROOT DISK
               </span>
-              <button className="btn btn-sm" onClick={onInspectStorage}>
+              <button type="button" className="btn btn-sm" onClick={onInspectStorage}>
                 INSPECT
               </button>
             </div>
