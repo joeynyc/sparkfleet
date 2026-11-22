@@ -1,0 +1,114 @@
+/** Largest stdout or stderr kept from one remote command. */
+export const MAX_EXEC_OUTPUT_BYTES = 256 * 1024;
+
+// Host keys are verified against the user's known_hosts; BatchMode makes an
+// unknown or changed key fail loudly instead of prompting or being accepted.
+const SSH_OPTIONS = [
+  "-o",
+  "BatchMode=yes",
+  "-o",
+  "ConnectTimeout=5",
+  "-o",
+  "ServerAliveInterval=5",
+  "-o",
+  "ServerAliveCountMax=2",
+];
+
+const SAFE_SSH_HOST = /^[A-Za-z0-9_][A-Za-z0-9._@-]*$/;
+
+/** Rejects values ssh would parse as an option (e.g. `-oProxyCommand=...`). */
+export function assertSafeSshHost(host: string): string {
+  if (!SAFE_SSH_HOST.test(host)) {
+    throw new Error(`Invalid SSH host "${host}": expected an ssh config alias or hostname`);
+  }
+  return host;
+}
+
+export function sshCommandArgs(host: string, remoteCommand: string): string[] {
+  return ["ssh", ...SSH_OPTIONS, "--", assertSafeSshHost(host), remoteCommand];
+}
+
+export function sshTerminalArgs(host: string): string[] {
+  return ["ssh", "-tt", "-o", "ServerAliveInterval=10", "--", assertSafeSshHost(host)];
+}
+
+export interface CappedText {
+  text: string;
+  truncated: boolean;
+}
+
+/**
+ * Drains a stream but keeps at most `maxBytes`. `onOverflow` fires once when
+ * the cap is hit so the caller can stop the producer.
+ */
+export async function readCapped(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  onOverflow?: () => void
+): Promise<CappedText> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let truncated = false;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (truncated) continue;
+    const room = maxBytes - size;
+    if (value.byteLength > room) {
+      chunks.push(value.subarray(0, room));
+      size = maxBytes;
+      truncated = true;
+      onOverflow?.();
+    } else {
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  }
+  return { text: new TextDecoder().decode(Buffer.concat(chunks)), truncated };
+}
+
+export interface SshRunResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  /** Output exceeded MAX_EXEC_OUTPUT_BYTES and the command was stopped. */
+  truncated: boolean;
+  timedOut: boolean;
+}
+
+export async function runSsh(
+  host: string,
+  remoteCommand: string,
+  timeoutMs: number
+): Promise<SshRunResult> {
+  const started = Date.now();
+  const proc = Bun.spawn(sshCommandArgs(host, remoteCommand), {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, timeoutMs);
+  const stop = () => proc.kill();
+
+  const [out, err, exitCode] = await Promise.all([
+    readCapped(proc.stdout, MAX_EXEC_OUTPUT_BYTES, stop),
+    readCapped(proc.stderr, MAX_EXEC_OUTPUT_BYTES, stop),
+    proc.exited,
+  ]);
+  clearTimeout(timer);
+
+  return {
+    exitCode,
+    stdout: out.text,
+    stderr: err.text,
+    durationMs: Date.now() - started,
+    truncated: out.truncated || err.truncated,
+    timedOut,
+  };
+}

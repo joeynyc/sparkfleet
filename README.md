@@ -43,7 +43,7 @@ Zero agents to install on the Sparks: SparkFleet streams a lightweight Python te
    ```bash
    bun run start
    ```
-   Open [http://127.0.0.1:7700](http://127.0.0.1:7700).
+   Open the access link the server prints (`http://127.0.0.1:7700/auth?token=...`). It authorizes that browser until the server restarts.
 
 ## Development
 
@@ -56,9 +56,19 @@ bun run dev:web   # http://127.0.0.1:5173 (Vite HMR proxied to :7700)
 
 ## Security Model
 
-- Binds strictly to `127.0.0.1` by default (never exposed to the LAN unless explicitly modified).
-- Stores no SSH keys or credentials; delegates authentication to your local `ssh` binary and `~/.ssh/config`.
-- Local cluster hostnames and IPs live in `sparkfleet.config.json` (listed in `.gitignore`).
+The server can run arbitrary commands on your cluster, so it treats every request as hostile until proven otherwise:
+
+- **Loopback only.** Binds to `127.0.0.1`; it is never reachable from the LAN.
+- **Per-launch access token.** Each start generates a random token. The printed link stores it in an `HttpOnly`, `SameSite=Strict` cookie; every API call and WebSocket requires it. Set `SPARKFLEET_TOKEN` (24+ characters) to pin a token across restarts.
+- **Origin and Host allowlist.** Requests whose `Origin` or `Host` is not this server are refused, which blocks other websites in your browser (CSRF, cross-site WebSocket hijacking) and DNS rebinding. No CORS headers are sent.
+- **Verified SSH host keys.** Connections use your `known_hosts`; an unknown or changed key fails instead of being accepted. SSH to each node once by hand before first use.
+- **No stored credentials.** Authentication is delegated to your local `ssh` and `~/.ssh/config`.
+- **Bounded execution.** Command output is capped at 256 KB per stream, with at most 4 concurrent commands per node and 8 open terminals.
+- **Redacted process arguments.** Values of flags and variables that look like credentials are masked before process lists reach the browser.
+
+Anyone holding the access link can run commands as your SSH user on both nodes. Treat it like a password.
+
+Local cluster host aliases live in `sparkfleet.config.json`, which is gitignored.
 
 ## License
 

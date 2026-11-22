@@ -225,4 +225,7 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   durationMs: number;
+  /** Output exceeded the server's cap and the command was stopped. */
+  truncated: boolean;
+  timedOut: boolean;
 }

@@ -10,21 +10,17 @@ import type {
   NodeSnapshot,
 } from "../shared/types";
 import { HISTORY_LIMIT, NODE_IDS, NODES } from "./config";
-import { REMOTE_TELEMETRY_AGENT_PY } from "./remote-agent";
+import type { GpuProcess, TopProcess } from "../shared/types";
 import { initLocalHostMeta, sampleLocalHost } from "./local-host";
+import { redactSecrets } from "./redact";
+import { REMOTE_TELEMETRY_AGENT_PY } from "./remote-agent";
+import { runSsh, sshCommandArgs } from "./ssh";
 
-const SSH_BASE_ARGS = [
-  "-o",
-  "BatchMode=yes",
-  "-o",
-  "ConnectTimeout=5",
-  "-o",
-  "ServerAliveInterval=5",
-  "-o",
-  "ServerAliveCountMax=2",
-  "-o",
-  "StrictHostKeyChecking=no",
-];
+const MAX_CONCURRENT_EXECS_PER_NODE = 4;
+const SHELL_SAFE_HOST = /^[A-Za-z0-9._-]+$/;
+
+/** Thrown when a node already has the maximum number of commands in flight. */
+export class FleetBusyError extends Error {}
 
 function emptySnapshot(id: NodeId): NodeSnapshot {
   const cfg = NODES[id];
@@ -113,6 +109,7 @@ export class FleetCollector {
   private listeners = new Set<(payload: FleetStatePayload) => void>();
   private procs = new Map<NodeId, Bun.Subprocess>();
   private stopped = false;
+  private activeExecs: Record<NodeId, number> = { "spark-0": 0, "spark-1": 0 };
 
   async start(): Promise<void> {
     await initLocalHostMeta();
@@ -176,7 +173,8 @@ export class FleetCollector {
     const encoded = Buffer.from(REMOTE_TELEMETRY_AGENT_PY, "utf8").toString("base64");
     const remoteCmd = `python3 -u -c "import base64; exec(base64.b64decode('${encoded}').decode())"`;
 
-    const proc = Bun.spawn(["ssh", ...SSH_BASE_ARGS, cfg.sshHost, remoteCmd], {
+    const proc = Bun.spawn(sshCommandArgs(cfg.sshHost, remoteCmd), {
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -250,14 +248,25 @@ export class FleetCollector {
         loadAvg: data.loadAvg ?? [0, 0, 0],
         cpu: data.cpu ?? prev.cpu,
         memory: data.memory ?? prev.memory,
-        gpu: data.gpu ?? prev.gpu,
+        gpu: data.gpu
+          ? {
+              ...data.gpu,
+              processes: (data.gpu.processes ?? []).map((p: GpuProcess) => ({
+                ...p,
+                cmdline: redactSecrets(p.cmdline ?? p.name),
+              })),
+            }
+          : prev.gpu,
         thermals: data.thermals ?? [],
         fansRpm: data.fansRpm ?? [0, 0],
         disk: data.disk ?? prev.disk,
         interfaces: data.interfaces ?? [],
         rdmaLinks: data.rdmaLinks ?? [],
         containers: data.containers ?? [],
-        topProcesses: data.topProcesses ?? [],
+        topProcesses: (data.topProcesses ?? []).map((p: TopProcess) => ({
+          ...p,
+          args: redactSecrets(p.args),
+        })),
         ports: data.ports ?? [],
       };
       this.nodes[id] = next;
@@ -422,36 +431,18 @@ export class FleetCollector {
   }
 
   async execOnNode(id: NodeId, command: string, timeoutMs = 20000): Promise<ExecResult> {
-    const cfg = NODES[id];
-    const started = Date.now();
-    const proc = Bun.spawn(["ssh", ...SSH_BASE_ARGS, cfg.sshHost, command], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const timer = setTimeout(() => {
-      try {
-        proc.kill();
-      } catch {
-        // ignore
-      }
-    }, timeoutMs);
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    clearTimeout(timer);
-
-    return {
-      nodeId: id,
-      sshHost: cfg.sshHost,
-      exitCode,
-      stdout,
-      stderr,
-      durationMs: Date.now() - started,
-    };
+    if (this.activeExecs[id] >= MAX_CONCURRENT_EXECS_PER_NODE) {
+      throw new FleetBusyError(
+        `${this.nodes[id].label} already has ${MAX_CONCURRENT_EXECS_PER_NODE} commands running`
+      );
+    }
+    const { sshHost } = NODES[id];
+    this.activeExecs[id]++;
+    try {
+      return { nodeId: id, sshHost, ...(await runSsh(sshHost, command, timeoutMs)) };
+    } finally {
+      this.activeExecs[id]--;
+    }
   }
 
   private async measureMacPing(ip: string): Promise<number | null> {
@@ -479,22 +470,27 @@ export class FleetCollector {
       };
     };
 
-    const s0Lan =
+    // These values are interpolated into a remote shell command.
+    const shellSafe = (value: string | undefined) =>
+      value && SHELL_SAFE_HOST.test(value) ? value : "";
+    const s0Lan = shellSafe(
       this.nodes["spark-0"].interfaces.find((i) => i.role === "lan")?.ip ||
-      NODES["spark-0"].lanIp ||
-      NODES["spark-0"].sshHost;
-    const s1Lan =
+        NODES["spark-0"].lanIp ||
+        NODES["spark-0"].sshHost
+    );
+    const s1Lan = shellSafe(
       this.nodes["spark-1"].interfaces.find((i) => i.role === "lan")?.ip ||
-      NODES["spark-1"].lanIp ||
-      NODES["spark-1"].sshHost;
-    const s1FabA =
+        NODES["spark-1"].lanIp ||
+        NODES["spark-1"].sshHost
+    );
+    const s1FabA = shellSafe(
       this.nodes["spark-1"].interfaces.find((i) => i.role === "fabric-a")?.ip ||
-      NODES["spark-1"].fabricIps[0] ||
-      "";
-    const s1FabB =
+        NODES["spark-1"].fabricIps[0]
+    );
+    const s1FabB = shellSafe(
       this.nodes["spark-1"].interfaces.find((i) => i.role === "fabric-b")?.ip ||
-      NODES["spark-1"].fabricIps[1] ||
-      "";
+        NODES["spark-1"].fabricIps[1]
+    );
 
     const probeCmds = [
       s1FabA ? `echo '===A==='; ping -c 4 -i 0.2 -W 1 ${s1FabA} 2>&1 || true` : "echo '===A==='",
