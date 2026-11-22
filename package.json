@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch server/index.ts",
-    "dev:web": "vite --port 5173",
+    "dev:web": "vite",
     "build": "vite build",
-    "start": "bun run build && bun server/index.ts"
+    "start": "bun run build && bun server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint",
+    "test": "bun test",
+    "check": "bun run typecheck && bun run lint && bun test"
   },
   "dependencies": {
     "@fontsource/chakra-petch": "^5.3.0",
@@ -20,6 +24,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
     "@types/bun": "^1.2.15",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",

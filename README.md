@@ -1,74 +1,94 @@
 # SparkFleet
 
-Localhost telemetry and control-plane cockpit for dual **NVIDIA DGX Spark (GB10)** clusters connected over **dual 200GbE ConnectX-7 RoCE**, run from a Mac or Linux workstation over your existing SSH configuration.
+A localhost dashboard and control plane for a pair of **NVIDIA DGX Spark** nodes, run from a Mac or Linux workstation over your existing SSH configuration.
 
-Zero agents to install on the Sparks: SparkFleet streams a lightweight Python telemetry collector over persistent SSH sessions and exposes a Bun + React dashboard on `127.0.0.1:7700`.
+Nothing is installed on the nodes. SparkFleet streams a small Python agent to each one over SSH and serves a Bun + React dashboard on `127.0.0.1:7700`.
 
 ## Features
 
-- **1Hz Dual-Node GB10 Telemetry:** SM utilization, graphics clocks, board power draw, thermal limit margin, multi-zone hwmon sensors (GB10 die, Grace SoC, ConnectX-7 NIC, NVMe, Wi-Fi), dual fan RPMs, and active GPU compute PIDs.
-- **256 GB Unified Memory (UMA) Breakdown:** Splits GPU compute allocations, active host memory, page cache, and swap across both 128 GB LPDDR5X nodes.
-- **20-Core Grace ARMv9 Matrix:** Real-time per-core utilization bars across all 10x Cortex-X925 + 10x Cortex-A725 cores per node.
-- **ConnectX-7 400GbE Fabric Bridge:** Live bidirectional throughput, cumulative bytes transferred, RDMA HCA status (`rocep1s0f1` / `roceP2p1s0f1`), and one-click inter-Spark + workstation-to-Spark RTT probes.
-- **Workloads & Docker Control:** Fleet-wide container inventory across both nodes with start/stop/restart actions, live log streaming drawer, top RSS processes, and TCP listening port map.
-- **Dual Oscilloscopes:** Rolling 5-minute 1Hz Canvas charts comparing GPU util, power draw, fabric throughput, thermals, CPU, and UMA usage.
-- **Parallel Fleet Ops & Synchronized SSH PTYs:** Execute commands across both nodes simultaneously with timed output panes, plus two full interactive `xterm.js` SSH terminals with a broadcast **Sync Send** bar.
-- **NVMe Capacity Alerts & Inspector:** Automatic capacity warnings with one-click home/Docker disk breakdown over SSH.
+- **Live GPU telemetry at 1 Hz:** utilization, clock, power draw, thermal-limit margin, per-sensor temperatures, fan speed and the processes holding GPU memory.
+- **Unified memory breakdown:** GPU allocations, host processes, page cache and swap per node.
+- **Per-core CPU matrix** with frequency and I/O wait.
+- **Node-to-node fabric view:** throughput in each direction, link state and speed for up to two direct links, plus on-demand latency probes between the nodes.
+- **Disk pressure alerts** using the same used/available figure as `df`, with a one-click breakdown of home-directory and Docker usage.
+- **Docker control:** every container on both nodes, with start, stop, restart and a log viewer, alongside top processes and listening ports.
+- **Comparison charts:** a rolling five-minute window of GPU load, power, fabric throughput, temperature, CPU and memory for both nodes.
+- **Parallel commands and terminals:** run one command on both nodes with timed output, or work in two interactive SSH terminals and send a line to both at once.
+
+Network interfaces and the root disk are detected on each node: the interface with the default route is treated as the LAN, and other wired interfaces with an address are treated as fabric links.
 
 ## Requirements
 
-- [Bun](https://bun.sh) 1.3+ on the local control workstation (macOS or Linux)
-- Passwordless SSH access to both DGX Spark nodes configured in `~/.ssh/config` (works out of the box with NVIDIA Sync SSH configs)
-- `python3`, `nvidia-smi`, and `docker` available on the Spark nodes (preinstalled on DGX OS)
+- [Bun](https://bun.sh) 1.3+ on the workstation (macOS or Linux)
+- Key-based SSH access to both nodes, each already present in `known_hosts` (connect once by hand first)
+- `python3`, `nvidia-smi` and `docker` on the nodes; all three ship with DGX OS
 
-## Quick Start
+## Quick start
 
 1. Install dependencies:
    ```bash
    bun install
    ```
 
-2. Create your local cluster config (this file is gitignored):
+2. Tell SparkFleet which SSH hosts to use. Copy the example and set each `sshHost` to an alias from `~/.ssh/config` (NVIDIA Sync aliases work as they are):
    ```bash
    cp sparkfleet.config.example.json sparkfleet.config.json
    ```
-   Edit `sparkfleet.config.json` to set your SSH host aliases (`sshHost`) matching `~/.ssh/config`. LAN and RoCE IPs are auto-discovered from the live nodes once connected, so only `sshHost` is strictly required.
+   `sshHost` is the only required field; `label`, `role` and `accent` are cosmetic. The file is gitignored.
 
-   Alternatively, configure via environment variables:
+   Environment variables override the file:
    ```bash
    SPARK0_HOST=my-spark-1 SPARK1_HOST=my-spark-2 bun run start
    ```
 
-3. Build and start the localhost control plane:
+3. Build and start:
    ```bash
    bun run start
    ```
    Open the access link the server prints (`http://127.0.0.1:7700/auth?token=...`). It authorizes that browser until the server restarts.
 
+### Configuration reference
+
+| Setting | Where | Default |
+|---|---|---|
+| SSH host per node | `nodes.spark-0.sshHost`, `SPARK0_HOST` (and `spark-1`, `SPARK1_HOST`) | `spark-1`, `spark-2` |
+| Display label, role | `nodes.*.label`, `nodes.*.role`, `SPARK0_LABEL`, `SPARK0_ROLE` | `SPARK-01`, `RANK 0 · PRIMARY` |
+| Port | `port`, `SPARKFLEET_PORT` | `7700` |
+| Config file path | `SPARKFLEET_CONFIG` | `./sparkfleet.config.json` |
+| Fixed access token | `SPARKFLEET_TOKEN` (24+ characters) | random per launch |
+
 ## Development
 
-Run the Bun API/WebSocket server and Vite dev server in two terminals:
-
 ```bash
-bun run dev       # http://127.0.0.1:7700 (telemetry + PTY WebSockets)
-bun run dev:web   # http://127.0.0.1:5173 (Vite HMR proxied to :7700)
+bun run dev       # control plane on http://127.0.0.1:7700, restarts on change
+bun run dev:web   # Vite dev server on http://127.0.0.1:5173, proxying to :7700
+bun run check     # typecheck, lint and tests
 ```
 
-## Security Model
+Open the access link from `bun run dev` once, then use the Vite URL; both share the session cookie. Set `SPARKFLEET_TOKEN` while developing so restarts do not invalidate it.
+
+The agent lives in `server/agent.py` and uses only the Python standard library. To see what a node reports:
+
+```bash
+ssh my-spark-1 'timeout 3 python3 -u -' < server/agent.py | tail -1 | jq
+```
+
+## Security model
 
 The server can run arbitrary commands on your cluster, so it treats every request as hostile until proven otherwise:
 
 - **Loopback only.** Binds to `127.0.0.1`; it is never reachable from the LAN.
-- **Per-launch access token.** Each start generates a random token. The printed link stores it in an `HttpOnly`, `SameSite=Strict` cookie; every API call and WebSocket requires it. Set `SPARKFLEET_TOKEN` (24+ characters) to pin a token across restarts.
+- **Per-launch access token.** Each start generates a random token. The printed link stores it in an `HttpOnly`, `SameSite=Strict` cookie; every API call and WebSocket requires it.
 - **Origin and Host allowlist.** Requests whose `Origin` or `Host` is not this server are refused, which blocks other websites in your browser (CSRF, cross-site WebSocket hijacking) and DNS rebinding. No CORS headers are sent.
-- **Verified SSH host keys.** Connections use your `known_hosts`; an unknown or changed key fails instead of being accepted. SSH to each node once by hand before first use.
+- **Verified SSH host keys.** Connections use your `known_hosts`; an unknown or changed key fails instead of being accepted.
 - **No stored credentials.** Authentication is delegated to your local `ssh` and `~/.ssh/config`.
 - **Bounded execution.** Command output is capped at 256 KB per stream, with at most 4 concurrent commands per node and 8 open terminals.
 - **Redacted process arguments.** Values of flags and variables that look like credentials are masked before process lists reach the browser.
+- **No third-party requests.** Fonts and scripts are served locally under a restrictive Content-Security-Policy.
 
 Anyone holding the access link can run commands as your SSH user on both nodes. Treat it like a password.
 
-Local cluster host aliases live in `sparkfleet.config.json`, which is gitignored.
+SparkFleet keeps one multiplexed SSH connection per node open (`~/.ssh/sparkfleet-*` control sockets); they close on their own a minute after the server stops.
 
 ## License
 
