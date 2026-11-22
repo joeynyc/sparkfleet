@@ -1,5 +1,5 @@
 import { Box, FileText, Network, Play, RotateCw, Square, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NODE_IDS } from "../../shared/fleet-state";
 import type { ExecResult, NodeId, NodeSnapshot } from "../../shared/types";
 import { api, errorMessage, postJson } from "../api";
@@ -29,6 +29,13 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [logDrawer, setLogDrawer] = useState<LogDrawer | null>(null);
+  const drawerRef = useRef<HTMLDivElement | null>(null);
+  const openDrawerKey = logDrawer && `${logDrawer.nodeId}/${logDrawer.name}`;
+
+  // The drawer renders above the table; bring it into view when a row far down opens it.
+  useEffect(() => {
+    if (openDrawerKey) drawerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [openDrawerKey]);
 
   const rows = NODE_IDS.filter((id) => filterNode === "all" || filterNode === id).flatMap((id) =>
     nodes[id].containers
@@ -74,7 +81,7 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {actionError && (
-        <div className="notice-error" role="alert">
+        <div className="notice-error sticky-notice" role="alert">
           <span>{actionError}</span>
           <button type="button" className="btn btn-sm" onClick={() => setActionError(null)}>
             <X size={11} /> DISMISS
@@ -82,9 +89,12 @@ export function WorkloadsView({ nodes }: WorkloadsViewProps) {
         </div>
       )}
 
-      {/* Sits above the table so opening logs is visible without scrolling. */}
       {logDrawer && (
-        <div className="panel" style={{ borderColor: "var(--spark0)" }}>
+        <div
+          ref={drawerRef}
+          className="panel"
+          style={{ borderColor: "var(--spark0)", scrollMarginTop: 66 }}
+        >
           <div className="panel-header">
             <div className="panel-title">
               <FileText size={14} color="var(--spark0)" />

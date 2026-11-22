@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { redactSecrets } from "./redact";
-import { assertSafeSshHost, readCapped, sshCommandArgs } from "./ssh";
+import { assertSafeSshHost, readCapped, shellQuote, sshCommandArgs, withRemoteDeadline } from "./ssh";
 
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -46,6 +46,25 @@ describe("ssh host validation", () => {
     const args = sshCommandArgs("spark-1", "uptime");
     expect(args.slice(-3)).toEqual(["--", "spark-1", "uptime"]);
     expect(args.join(" ")).not.toContain("StrictHostKeyChecking");
+  });
+});
+
+describe("remote deadline wrapper", () => {
+  test("quoted text reaches the shell as one unchanged word", () => {
+    const samples = ["plain", "it's", "a 'b' c", "'''", "", "two\nlines", '"$(id)" `id` $HOME; rm -rf /'];
+    for (const text of samples) {
+      const printed = Bun.spawnSync(["sh", "-c", `printf %s ${shellQuote(text)}`]).stdout.toString();
+      expect(printed).toBe(text);
+    }
+  });
+
+  test("the wrapped command still runs as written, under a whole-second limit", () => {
+    const wrapped = withRemoteDeadline(`echo "it's $((1 + 1))"`, 1500);
+    const prefix = "timeout --kill-after=2 2 ";
+    expect(wrapped.startsWith(prefix)).toBe(true);
+    // macOS has no `timeout`, so run the part after it: the bash invocation itself.
+    const printed = Bun.spawnSync(["sh", "-c", wrapped.slice(prefix.length)]).stdout.toString();
+    expect(printed).toBe("it's 2\n");
   });
 });
 

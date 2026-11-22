@@ -61,11 +61,22 @@ function cpuUsagePct(): number {
   return Math.max(0, Math.min(100, Math.round(busy * 1000) / 10));
 }
 
+async function describeChip(): Promise<string> {
+  const model = os.cpus()[0]?.model;
+  if (model && model !== "unknown") return model;
+  // Linux on ARM gives Node no model string; lscpu lists the core types.
+  const lscpu = await commandOutput(["lscpu"]);
+  const names = new Set([...lscpu.matchAll(/^Model name:\s+(.+)$/gm)].map((m) => m[1].trim()));
+  return names.size > 0 ? [...names].join(" / ") : os.arch();
+}
+
+const chip = describeChip();
+
 export async function sampleLocalHost(): Promise<LocalHostSnapshot> {
   const memTotalBytes = os.totalmem();
   return {
     hostname: os.hostname().replace(/\.local$/, ""),
-    chip: os.cpus()[0]?.model || os.arch(),
+    chip: await chip,
     osVersion: await osVersion,
     memTotalBytes,
     memUsedBytes: await usedMemoryBytes(memTotalBytes),

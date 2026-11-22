@@ -234,6 +234,14 @@ body {
   font-size: 11.5px;
 }
 
+/* Stays below the top bar so an action taken far down a long table still shows its result. */
+.sticky-notice {
+  position: sticky;
+  top: 62px;
+  z-index: 30;
+  background: linear-gradient(var(--crimson-dim), var(--crimson-dim)), var(--bg-panel);
+}
+
 /* Main Workspace */
 .workspace {
   max-width: 1680px;

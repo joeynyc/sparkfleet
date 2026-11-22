@@ -85,37 +85,60 @@ export interface SshRunResult {
   timedOut: boolean;
 }
 
+const REMOTE_KILL_GRACE_SEC = 2;
+const LOCAL_BACKSTOP_MS = 5000;
+// Exit statuses of coreutils `timeout`: 124 after SIGTERM, 137 when it had to SIGKILL.
+const TIMEOUT_EXIT_CODES = [124, 137];
+
+/** Quotes text as a single POSIX shell word. */
+export function shellQuote(text: string): string {
+  return `'${text.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * Wraps a command so the node stops it, and its children, at the deadline.
+ * Killing only the local ssh client is not enough: a multiplexed client waits
+ * for the remote command, and the command itself would keep running.
+ */
+export function withRemoteDeadline(command: string, timeoutMs: number): string {
+  const seconds = Math.ceil(timeoutMs / 1000);
+  return `timeout --kill-after=${REMOTE_KILL_GRACE_SEC} ${seconds} bash -c ${shellQuote(command)}`;
+}
+
 export async function runSsh(
   host: string,
   remoteCommand: string,
   timeoutMs: number
 ): Promise<SshRunResult> {
   const started = Date.now();
-  const proc = Bun.spawn(sshCommandArgs(host, remoteCommand), {
+  const proc = Bun.spawn(sshCommandArgs(host, withRemoteDeadline(remoteCommand, timeoutMs)), {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    proc.kill();
-  }, timeoutMs);
-  const stop = () => proc.kill();
+  // SIGKILL, because a multiplexed ssh client answers SIGTERM by waiting for the remote side.
+  const stop = () => proc.kill("SIGKILL");
+  // Only reached if the connection hangs; normally the node enforces the deadline.
+  let backstopFired = false;
+  const backstop = setTimeout(() => {
+    backstopFired = true;
+    stop();
+  }, timeoutMs + LOCAL_BACKSTOP_MS);
 
   const [out, err, exitCode] = await Promise.all([
     readCapped(proc.stdout, MAX_EXEC_OUTPUT_BYTES, stop),
     readCapped(proc.stderr, MAX_EXEC_OUTPUT_BYTES, stop),
     proc.exited,
   ]);
-  clearTimeout(timer);
+  clearTimeout(backstop);
 
+  const durationMs = Date.now() - started;
   return {
     exitCode,
     stdout: out.text,
     stderr: err.text,
-    durationMs: Date.now() - started,
+    durationMs,
     truncated: out.truncated || err.truncated,
-    timedOut,
+    timedOut: backstopFired || (TIMEOUT_EXIT_CODES.includes(exitCode) && durationMs >= timeoutMs),
   };
 }
