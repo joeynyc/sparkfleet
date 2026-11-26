@@ -1,4 +1,4 @@
-import type { FleetStatePayload, FleetTick, HistoryPoint, NodeId, NodeSnapshot } from "./types";
+import type { FleetStatePayload, FleetTick, HistoryPoint, NodeId } from "./types";
 
 /** Rolling window kept per node: five minutes at one sample per second. */
 export const HISTORY_LIMIT = 300;
