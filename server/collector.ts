@@ -23,6 +23,7 @@ import { isConfiguredNode } from "./targets";
 
 const AGENT_SOURCE = new URL("./agent.py", import.meta.url);
 const TICK_MS = 250;
+const LOCAL_HOST_SAMPLE_INTERVAL_MS = 1000;
 const RECONNECT_DELAY_MS = 2500;
 const HOST_PING_INTERVAL_MS = 8000;
 const MAX_CONCURRENT_EXECS_PER_NODE = 4;
@@ -45,6 +46,17 @@ function perNode<T>(make: (id: NodeId) => T): Record<NodeId, T> {
   const result: Record<NodeId, T> = {};
   for (const id of NODE_IDS) result[id] = make(id);
   return result;
+}
+
+function sameLocalHost(a: LocalHostSnapshot, b: LocalHostSnapshot): boolean {
+  return (
+    a.hostname === b.hostname &&
+    a.chip === b.chip &&
+    a.osVersion === b.osVersion &&
+    a.memTotalBytes === b.memTotalBytes &&
+    a.memUsedBytes === b.memUsedBytes &&
+    a.cpuUsagePct === b.cpuUsagePct
+  );
 }
 
 function emptySnapshot(id: NodeId): NodeSnapshot {
@@ -117,6 +129,9 @@ export class FleetCollector {
   private history = perNode<HistoryPoint[]>(() => []);
   /** Points recorded since the last tick was sent. */
   private pendingPoints = perNode<HistoryPoint[]>(() => []);
+  private dirtyNodes = new Set<NodeId>();
+  private localHostChanged = false;
+  private probesChanged = false;
   /** Serialized slow sections as of the latest sample, and as last carried by a tick. */
   private slowJson = perNode<Partial<Record<SlowNodeField, string>>>(() => ({}));
   private sentSlowJson = perNode<Partial<Record<SlowNodeField, string>>>(() => ({}));
@@ -142,10 +157,13 @@ export class FleetCollector {
     );
     for (const id of NODE_IDS) void collector.streamNode(id);
     collector.timers.push(
+      setInterval(() => collector.flush(), TICK_MS),
       setInterval(async () => {
-        collector.localHost = await sampleLocalHost();
-        collector.flush();
-      }, TICK_MS),
+        const localHost = await sampleLocalHost();
+        if (sameLocalHost(localHost, collector.localHost)) return;
+        collector.localHost = localHost;
+        collector.localHostChanged = true;
+      }, LOCAL_HOST_SAMPLE_INTERVAL_MS),
       setInterval(() => void collector.pingNodes(), HOST_PING_INTERVAL_MS)
     );
     return collector;
@@ -158,13 +176,14 @@ export class FleetCollector {
   }
 
   /**
-   * Emits a tick with everything gathered since the previous one. Call before
-   * sending `getPayload()` to a new client so no point is delivered twice.
-   * Every client receives every tick, so a slow section already sent is known to all.
+   * Emits accumulated changes before a new client receives its snapshot.
    */
   flush(): void {
-    const nodes: Record<NodeId, NodeUpdate> = {};
-    for (const id of NODE_IDS) {
+    const hasPoints = Object.values(this.pendingPoints).some((points) => points.length > 0);
+    if (!hasPoints && this.dirtyNodes.size === 0 && !this.localHostChanged && !this.probesChanged) return;
+
+    const nodes: Partial<Record<NodeId, NodeUpdate>> = {};
+    for (const id of this.dirtyNodes) {
       const snapshot = this.nodes[id];
       const { containers, topProcesses, ports, ...update } = snapshot;
       const sent = this.sentSlowJson[id];
@@ -184,6 +203,9 @@ export class FleetCollector {
       alerts: this.computeAlerts(),
     };
     this.pendingPoints = perNode<HistoryPoint[]>(() => []);
+    this.dirtyNodes.clear();
+    this.localHostChanged = false;
+    this.probesChanged = false;
     this.onTick(tick);
   }
 
@@ -216,8 +238,12 @@ export class FleetCollector {
       if (this.stopped) return;
 
       const reason = stderr.text.trim().split("\n").pop() || `exit code ${exitCode}`;
-      this.nodes[id].connected = false;
-      this.nodes[id].error = `SSH stream ended (${reason}). Reconnecting...`;
+      const error = `SSH stream ended (${reason}). Reconnecting...`;
+      if (this.nodes[id].connected || this.nodes[id].error !== error) {
+        this.nodes[id].connected = false;
+        this.nodes[id].error = error;
+        this.dirtyNodes.add(id);
+      }
       await Bun.sleep(RECONNECT_DELAY_MS);
     }
   }
@@ -259,6 +285,7 @@ export class FleetCollector {
       error: null,
     };
     this.nodes[id] = node;
+    this.dirtyNodes.add(id);
     for (const field of SLOW_FIELDS) this.slowJson[id][field] = JSON.stringify(node[field]);
 
     const point: HistoryPoint = {
@@ -360,7 +387,10 @@ export class FleetCollector {
       NODE_IDS.map(async (id) => {
         const ip = this.nodes[id].interfaces.find((iface) => iface.role === "lan")?.ip;
         const rtt = ip && isIPv4(ip) ? await pingOnce(ip) : null;
-        this.nodes[id].hostRttMs = rtt;
+        if (this.nodes[id].hostRttMs !== rtt) {
+          this.nodes[id].hostRttMs = rtt;
+          this.dirtyNodes.add(id);
+        }
       })
     );
   }
@@ -379,6 +409,7 @@ export class FleetCollector {
     // At most one measurement per configured ordered pair, including the automatic probe.
     this.probes = this.probes.filter((p) => p.source !== source || p.target !== target);
     this.probes.push(result);
+    this.probesChanged = true;
     this.flush();
     return result;
   }

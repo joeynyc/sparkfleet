@@ -9,7 +9,7 @@ export function applyTick(
   tick: FleetTick,
   limit = HISTORY_LIMIT
 ): FleetStatePayload {
-  const nodes = {} as Record<NodeId, NodeSnapshot>;
+  const nodes = { ...state.nodes };
   for (const [id, update] of Object.entries(tick.nodes)) {
     // Slow sections absent from the tick keep their previous value.
     nodes[id] = { ...state.nodes[id], ...update };
