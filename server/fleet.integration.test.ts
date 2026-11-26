@@ -6,6 +6,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { applyTick } from "../shared/fleet-state";
 import type { ExecResult, FabricProbeResult, FleetStatePayload, NodeId, ServerMessage } from "../shared/types";
 
 const REPO = path.resolve(import.meta.dir, "..");
@@ -26,7 +27,7 @@ interface Fleet {
   stateDir: string;
   api(route: string, body?: unknown): Promise<Response>;
   state(): Promise<FleetStatePayload>;
-  telemetry(): WebSocket;
+  telemetry(sparse?: boolean): WebSocket;
   /** Hosts that were handed a one-shot command containing `marker`. */
   received(marker: string): string[];
 }
@@ -114,7 +115,8 @@ async function startFleet(
         ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
       }),
     state: async () => (await (await fleet.api("/api/state")).json()) as FleetStatePayload,
-    telemetry: () => new HeaderWebSocket(`ws://127.0.0.1:${port}/ws/telemetry`, { headers }),
+    telemetry: (sparse = false) =>
+      new HeaderWebSocket(`ws://127.0.0.1:${port}/ws/telemetry${sparse ? "?sparse=1" : ""}`, { headers }),
     received(marker) {
       const log = path.join(stateDir, "commands.log");
       if (!existsSync(log)) return [];
@@ -158,7 +160,7 @@ async function expectFullState(fleet: Fleet, fabricPerNode: number): Promise<Fle
 /** `init` carries full snapshots; ticks carry changed nodes and newly recorded points. */
 async function expectTelemetryProtocol(fleet: Fleet): Promise<void> {
   const frames: ServerMessage[] = [];
-  const socket = fleet.telemetry();
+  const socket = fleet.telemetry(true);
   socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)) as ServerMessage);
   const withPoints = new Set<NodeId>();
   let sawSlimTick = false;
@@ -276,7 +278,7 @@ test(
   async () => {
     const fleet = await startFleet(1, "ring", 1500);
     const frames: ServerMessage[] = [];
-    const socket = fleet.telemetry();
+    const socket = fleet.telemetry(true);
     socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)) as ServerMessage);
 
     try {
@@ -285,6 +287,53 @@ test(
       expect(frames.filter((frame) => frame.type === "tick").length).toBeLessThan(3);
     } finally {
       socket.close();
+    }
+  },
+  TEST_TIMEOUT_MS
+);
+
+test(
+  "legacy telemetry gets full node maps while sparse clients preserve nodes",
+  async () => {
+    const fleet = await startFleet(2, "ring", 30_000);
+    await expectFullState(fleet, 2);
+    const sparseFrames: ServerMessage[] = [];
+    const legacyFrames: ServerMessage[] = [];
+    const sparseSocket = fleet.telemetry(true);
+    const legacySocket = fleet.telemetry();
+
+    try {
+      sparseSocket.onmessage = (event) => sparseFrames.push(JSON.parse(String(event.data)) as ServerMessage);
+      legacySocket.onmessage = (event) => legacyFrames.push(JSON.parse(String(event.data)) as ServerMessage);
+      const [sparseInit] = await Promise.all([
+        until("sparse telemetry init", async () => sparseFrames.find((frame) => frame.type === "init")),
+        until("legacy telemetry init", async () => legacyFrames.find((frame) => frame.type === "init")),
+      ]);
+
+      const response = await fleet.api("/api/fabric/probe", {
+        source: fleet.ids[1],
+        target: fleet.ids[0],
+      });
+      expect(response.status).toBe(200);
+      const probe = (await response.json()) as FabricProbeResult;
+      const probeTick = (frames: ServerMessage[]) =>
+        frames.find(
+          (frame): frame is Extract<ServerMessage, { type: "tick" }> =>
+            frame.type === "tick" && frame.payload.probes.some((item) => item.ts === probe.ts)
+        );
+      const [sparseTick, legacyTick] = await Promise.all([
+        until("sparse probe tick", async () => probeTick(sparseFrames)),
+        until("legacy probe tick", async () => probeTick(legacyFrames)),
+      ]);
+
+      expect(Object.keys(sparseTick.payload.nodes)).toEqual([]);
+      expect(Object.keys(legacyTick.payload.nodes).sort()).toEqual([...fleet.ids].sort());
+      expect(Object.keys(applyTick(sparseInit.payload, sparseTick.payload).nodes).sort()).toEqual(
+        [...fleet.ids].sort()
+      );
+    } finally {
+      sparseSocket.close();
+      legacySocket.close();
     }
   },
   TEST_TIMEOUT_MS
@@ -318,7 +367,7 @@ test(
     await expectProbePaths(fleet, state);
 
     const frames: ServerMessage[] = [];
-    const socket = fleet.telemetry();
+    const socket = fleet.telemetry(true);
     try {
       socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)) as ServerMessage);
       await until("telemetry init before connection changes", async () =>

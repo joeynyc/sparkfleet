@@ -18,7 +18,7 @@ export function useFleet(): { fleet: FleetStatePayload | null; status: LinkStatu
 
     const connect = () => {
       const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${scheme}://${window.location.host}/ws/telemetry`);
+      ws = new WebSocket(`${scheme}://${window.location.host}/ws/telemetry?sparse=1`);
       ws.onopen = () => setStatus("live");
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data) as ServerMessage;

@@ -43,7 +43,7 @@ async function main(): Promise<void> {
   await waitForFleet();
   await Bun.sleep(WARMUP_MS);
 
-  const socket = new HeaderWebSocket(`ws://127.0.0.1:${PORT}/ws/telemetry`, { headers });
+  const socket = new HeaderWebSocket(`ws://127.0.0.1:${PORT}/ws/telemetry?sparse=1`, { headers });
   const ages: number[] = [];
   let tickFrames = 0;
   let nonemptyNodeFrames = 0;
