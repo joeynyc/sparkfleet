@@ -64,13 +64,28 @@ test("a tick without a node's slow sections keeps the ones already held", () => 
   const containers = [{ id: "c1", name: "job", image: "img", state: "running", status: "Up", ports: "" }];
   const held = { connected: true, containers, ports: [], topProcesses: [] } as unknown as FleetStatePayload["nodes"][string];
   const state = { ...stateWith([], []), nodes: { "spark-0": held } };
-  const update = { connected: false } as FleetTick["nodes"][string];
+  const update = { connected: false } as NonNullable<FleetTick["nodes"][string]>;
   const next = applyTick(state, { ...tickWith([], []), nodes: { "spark-0": update } });
   expect(next.nodes["spark-0"].connected).toBe(false);
   expect(next.nodes["spark-0"].containers).toBe(containers);
 
   const replaced = applyTick(next, { ...tickWith([], []), nodes: { "spark-0": { ...update, containers: [] } } });
   expect(replaced.nodes["spark-0"].containers).toEqual([]);
+});
+
+test("sparse node ticks preserve unchanged nodes", () => {
+  const spark0 = { connected: true } as FleetStatePayload["nodes"][string];
+  const spark1 = { connected: true } as FleetStatePayload["nodes"][string];
+  const state = { ...stateWith([], []), nodes: { "spark-0": spark0, "spark-1": spark1 } };
+
+  const unchanged = applyTick(state, { ...tickWith([], []), nodes: {} });
+  expect(unchanged.nodes["spark-0"]).toBe(spark0);
+  expect(unchanged.nodes["spark-1"]).toBe(spark1);
+
+  const update = { connected: false } as NonNullable<FleetTick["nodes"][string]>;
+  const changed = applyTick(state, { ...tickWith([], []), nodes: { "spark-0": update } });
+  expect(changed.nodes["spark-0"].connected).toBe(false);
+  expect(changed.nodes["spark-1"]).toBe(spark1);
 });
 
 test("takes live sections from the tick", () => {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { FleetTick, NodeId, ServerMessage } from "../shared/types";
+import type { FleetTick, NodeId, NodeUpdate, ServerMessage } from "../shared/types";
 import { FleetBusyError, FleetCollector } from "./collector";
 import { NODES, NODE_IDS, SERVER_PORT } from "./config";
 import { ProbeError } from "./fabric-probe";
@@ -22,7 +22,7 @@ const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const MAX_WS_BACKLOG_BYTES = 4 * 1024 * 1024;
 
 type WsData =
-  | { kind: "telemetry" }
+  | { kind: "telemetry"; sparseNodes: boolean }
   | {
       kind: "terminal";
       nodeId: NodeId;
@@ -87,10 +87,32 @@ function sanitizeContainerName(name: unknown): string | null {
 
 const telemetryClients = new Set<Bun.ServerWebSocket<WsData>>();
 let openTerminals = 0;
+let collector: FleetCollector;
+
+function legacyNodeTick(tick: FleetTick): FleetTick {
+  const currentNodes = collector.getPayload().nodes;
+  const nodes = {} as Record<NodeId, NodeUpdate>;
+  for (const id of NODE_IDS) {
+    const update: NodeUpdate = { ...currentNodes[id] };
+    delete update.containers;
+    delete update.topProcesses;
+    delete update.ports;
+
+    const changed = tick.nodes[id];
+    if (changed) {
+      if ("containers" in changed) update.containers = changed.containers;
+      if ("topProcesses" in changed) update.topProcesses = changed.topProcesses;
+      if ("ports" in changed) update.ports = changed.ports;
+    }
+    nodes[id] = update;
+  }
+  return { ...tick, nodes };
+}
 
 function broadcastTick(tick: FleetTick): void {
   if (telemetryClients.size === 0) return;
-  const frame = JSON.stringify({ type: "tick", payload: tick } satisfies ServerMessage);
+  let sparseFrame: string | undefined;
+  let legacyFrame: string | undefined;
   for (const ws of telemetryClients) {
     if (ws.getBufferedAmount() > MAX_WS_BACKLOG_BYTES) {
       // A stalled tab would otherwise make the server buffer frames forever.
@@ -98,11 +120,20 @@ function broadcastTick(tick: FleetTick): void {
       ws.close(1013, "telemetry backlog");
       continue;
     }
-    ws.send(frame);
+    if (ws.data.kind !== "telemetry") continue;
+    if (ws.data.sparseNodes) {
+      if (!sparseFrame) sparseFrame = JSON.stringify({ type: "tick", payload: tick } satisfies ServerMessage);
+      ws.send(sparseFrame);
+    } else {
+      if (!legacyFrame) {
+        legacyFrame = JSON.stringify({ type: "tick", payload: legacyNodeTick(tick) } satisfies ServerMessage);
+      }
+      ws.send(legacyFrame);
+    }
   }
 }
 
-const collector = await FleetCollector.start(broadcastTick);
+collector = await FleetCollector.start(broadcastTick);
 
 async function handleApi(req: Request, url: URL): Promise<Response> {
   const route = `${req.method} ${url.pathname}`;
@@ -239,7 +270,7 @@ const server = Bun.serve<WsData>({
     }
 
     if (url.pathname === "/ws/telemetry") {
-      if (srv.upgrade(req, { data: { kind: "telemetry" } })) return;
+      if (srv.upgrade(req, { data: { kind: "telemetry", sparseNodes: url.searchParams.get("sparse") === "1" } })) return;
       return respond("Upgrade failed", 400);
     }
 

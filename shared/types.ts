@@ -190,16 +190,16 @@ export type SlowNodeField = "containers" | "topProcesses" | "ports";
 
 export type NodeUpdate = Omit<NodeSnapshot, SlowNodeField> & Partial<Pick<NodeSnapshot, SlowNodeField>>;
 
-/** A one-second update: current state plus only the history points added since the last tick. */
+/** A periodic update: current state plus history points added since the last tick. */
 export interface FleetTick {
-  nodes: Record<NodeId, NodeUpdate>;
+  nodes: Partial<Record<NodeId, NodeUpdate>>;
   points: Record<NodeId, HistoryPoint[]>;
   probes: FabricProbeResult[];
   localHost: LocalHostSnapshot;
   alerts: AlertItem[];
 }
 
-/** Telemetry WebSocket protocol: one `init` on connect, then a `tick` per second. */
+/** Telemetry WebSocket protocol: one `init` on connect, then ticks when collector state changes. */
 export type ServerMessage =
   | { type: "init"; payload: FleetStatePayload }
   | { type: "tick"; payload: FleetTick };

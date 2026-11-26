@@ -6,6 +6,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { applyTick } from "../shared/fleet-state";
 import type { ExecResult, FabricProbeResult, FleetStatePayload, NodeId, ServerMessage } from "../shared/types";
 
 const REPO = path.resolve(import.meta.dir, "..");
@@ -26,7 +27,7 @@ interface Fleet {
   stateDir: string;
   api(route: string, body?: unknown): Promise<Response>;
   state(): Promise<FleetStatePayload>;
-  telemetry(): WebSocket;
+  telemetry(sparse?: boolean): WebSocket;
   /** Hosts that were handed a one-shot command containing `marker`. */
   received(marker: string): string[];
 }
@@ -62,7 +63,11 @@ const connectedNodes = (state: FleetStatePayload) =>
   Object.values(state.nodes).filter((node) => node.connected).map((node) => node.id);
 
 /** Starts the server on a free port with `size` fake nodes and waits until all of them report. */
-async function startFleet(size: number, topology: "ring" | "mesh" | "switch"): Promise<Fleet> {
+async function startFleet(
+  size: number,
+  topology: "ring" | "mesh" | "switch",
+  intervalMs = 200
+): Promise<Fleet> {
   const stateDir = mkdtempSync(path.join(tmpdir(), "sparkpit-fleet-"));
   const port = freePort();
   const ids = Array.from({ length: size }, (_, i) => `spark-${i}`);
@@ -85,7 +90,7 @@ async function startFleet(size: number, topology: "ring" | "mesh" | "switch"): P
       SPARKPIT_TOKEN: TOKEN,
       FAKE_FLEET_SIZE: String(size),
       FAKE_TOPOLOGY: topology,
-      FAKE_INTERVAL_MS: "200",
+      FAKE_INTERVAL_MS: String(intervalMs),
       FAKE_STATE_DIR: stateDir,
     },
     stdout: "ignore",
@@ -110,7 +115,8 @@ async function startFleet(size: number, topology: "ring" | "mesh" | "switch"): P
         ...(body === undefined ? {} : { method: "POST", body: JSON.stringify(body) }),
       }),
     state: async () => (await (await fleet.api("/api/state")).json()) as FleetStatePayload,
-    telemetry: () => new HeaderWebSocket(`ws://127.0.0.1:${port}/ws/telemetry`, { headers }),
+    telemetry: (sparse = false) =>
+      new HeaderWebSocket(`ws://127.0.0.1:${port}/ws/telemetry${sparse ? "?sparse=1" : ""}`, { headers }),
     received(marker) {
       const log = path.join(stateDir, "commands.log");
       if (!existsSync(log)) return [];
@@ -151,10 +157,10 @@ async function expectFullState(fleet: Fleet, fabricPerNode: number): Promise<Fle
   return state;
 }
 
-/** `init` carries full snapshots; ticks carry points for every node and drop unchanged slow sections. */
+/** `init` carries full snapshots; ticks carry changed nodes and newly recorded points. */
 async function expectTelemetryProtocol(fleet: Fleet): Promise<void> {
   const frames: ServerMessage[] = [];
-  const socket = fleet.telemetry();
+  const socket = fleet.telemetry(true);
   socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)) as ServerMessage);
   const withPoints = new Set<NodeId>();
   let sawSlimTick = false;
@@ -165,12 +171,14 @@ async function expectTelemetryProtocol(fleet: Fleet): Promise<void> {
         const frame = frames[checked];
         if (frame.type !== "tick") throw new Error(`Frame ${checked} is "${frame.type}", expected a tick`);
         const { nodes, points } = frame.payload;
-        expect(Object.keys(nodes)).toEqual(fleet.ids);
+        for (const [id, update] of Object.entries(nodes)) {
+          if (!update) continue;
+          expect(fleet.ids).toContain(id);
+          expect(typeof update.gpu.utilPct).toBe("number");
+          expect(update.interfaces.length).toBeGreaterThan(0);
+          if (!("containers" in update)) sawSlimTick = true;
+        }
         for (const id of fleet.ids) {
-          // Fast sections are in every tick.
-          expect(typeof nodes[id].gpu.utilPct).toBe("number");
-          expect(nodes[id].interfaces.length).toBeGreaterThan(0);
-          if (!("containers" in nodes[id])) sawSlimTick = true;
           if (points[id]?.length) {
             expect(typeof points[id][0].ts).toBe("number");
             withPoints.add(id);
@@ -266,6 +274,72 @@ test(
 );
 
 test(
+  "does not emit unchanged quarter-second ticks at a slower simulator cadence",
+  async () => {
+    const fleet = await startFleet(1, "ring", 1500);
+    const frames: ServerMessage[] = [];
+    const socket = fleet.telemetry(true);
+    socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)) as ServerMessage);
+
+    try {
+      await until("telemetry init", async () => frames.find((frame) => frame.type === "init"));
+      await Bun.sleep(900);
+      expect(frames.filter((frame) => frame.type === "tick").length).toBeLessThan(3);
+    } finally {
+      socket.close();
+    }
+  },
+  TEST_TIMEOUT_MS
+);
+
+test(
+  "legacy telemetry gets full node maps while sparse clients preserve nodes",
+  async () => {
+    const fleet = await startFleet(2, "ring", 30_000);
+    await expectFullState(fleet, 2);
+    const sparseFrames: ServerMessage[] = [];
+    const legacyFrames: ServerMessage[] = [];
+    const sparseSocket = fleet.telemetry(true);
+    const legacySocket = fleet.telemetry();
+
+    try {
+      sparseSocket.onmessage = (event) => sparseFrames.push(JSON.parse(String(event.data)) as ServerMessage);
+      legacySocket.onmessage = (event) => legacyFrames.push(JSON.parse(String(event.data)) as ServerMessage);
+      const [sparseInit] = await Promise.all([
+        until("sparse telemetry init", async () => sparseFrames.find((frame) => frame.type === "init")),
+        until("legacy telemetry init", async () => legacyFrames.find((frame) => frame.type === "init")),
+      ]);
+
+      const response = await fleet.api("/api/fabric/probe", {
+        source: fleet.ids[1],
+        target: fleet.ids[0],
+      });
+      expect(response.status).toBe(200);
+      const probe = (await response.json()) as FabricProbeResult;
+      const probeTick = (frames: ServerMessage[]) =>
+        frames.find(
+          (frame): frame is Extract<ServerMessage, { type: "tick" }> =>
+            frame.type === "tick" && frame.payload.probes.some((item) => item.ts === probe.ts)
+        );
+      const [sparseTick, legacyTick] = await Promise.all([
+        until("sparse probe tick", async () => probeTick(sparseFrames)),
+        until("legacy probe tick", async () => probeTick(legacyFrames)),
+      ]);
+
+      expect(Object.keys(sparseTick.payload.nodes)).toEqual([]);
+      expect(Object.keys(legacyTick.payload.nodes).sort()).toEqual([...fleet.ids].sort());
+      expect(Object.keys(applyTick(sparseInit.payload, sparseTick.payload).nodes).sort()).toEqual(
+        [...fleet.ids].sort()
+      );
+    } finally {
+      sparseSocket.close();
+      legacySocket.close();
+    }
+  },
+  TEST_TIMEOUT_MS
+);
+
+test(
   "four nodes in a mesh: every node reports three fabric interfaces",
   async () => {
     const fleet = await startFleet(4, "mesh");
@@ -292,32 +366,57 @@ test(
     await expectExecTargeting(fleet);
     await expectProbePaths(fleet, state);
 
-    const victim = 4;
-    const others = fleet.ids.filter((_, i) => i !== victim);
-    const dropFile = path.join(fleet.stateDir, `drop-${fleet.hosts[victim]}`);
-    writeFileSync(dropFile, "");
-    const isDown = async () => {
-      const now = await fleet.state();
-      return !now.nodes[fleet.ids[victim]].connected && offlineNodes(now).length > 0 && now;
-    };
-    const down = await until("the dropped node to go offline", isDown);
-    expect(offlineNodes(down)).toEqual([fleet.ids[victim]]);
-    expect(connectedNodes(down)).toEqual(others);
+    const frames: ServerMessage[] = [];
+    const socket = fleet.telemetry(true);
+    try {
+      socket.onmessage = (event) => frames.push(JSON.parse(String(event.data)) as ServerMessage);
+      await until("telemetry init before connection changes", async () =>
+        frames.find((frame) => frame.type === "init")
+      );
 
-    // The node must stay down, alone, across one of the server's 2.5 s reconnect attempts. A real
-    // delay: that timer runs in the server process, and the expectation is that nothing changes.
-    await Bun.sleep(3000);
-    const stillDown = await fleet.state();
-    expect(offlineNodes(stillDown)).toEqual([fleet.ids[victim]]);
-    expect(connectedNodes(stillDown)).toEqual(others);
+      const victim = 4;
+      const others = fleet.ids.filter((_, i) => i !== victim);
+      const dropFile = path.join(fleet.stateDir, `drop-${fleet.hosts[victim]}`);
+      writeFileSync(dropFile, "");
+      const isDown = async () => {
+        const now = await fleet.state();
+        return !now.nodes[fleet.ids[victim]].connected && offlineNodes(now).length > 0 && now;
+      };
+      const down = await until("the dropped node to go offline", isDown);
+      expect(offlineNodes(down)).toEqual([fleet.ids[victim]]);
+      expect(connectedNodes(down)).toEqual(others);
+      await until("offline connection tick", async () =>
+        frames.some(
+          (frame) =>
+            frame.type === "tick" &&
+            frame.payload.nodes[fleet.ids[victim]]?.connected === false &&
+            frame.payload.alerts.some((alert) => alert.kind === "offline" && alert.nodeId === fleet.ids[victim])
+        )
+      );
 
-    rmSync(dropFile);
-    const back = await until("the dropped node to reconnect", async () => {
-      const now = await fleet.state();
-      return now.nodes[fleet.ids[victim]].connected && now;
-    });
-    expect(offlineNodes(back)).toEqual([]);
-    expect(connectedNodes(back)).toEqual(fleet.ids);
+      // The node must stay down, alone, across one of the server's 2.5 s reconnect attempts. A real
+      // delay: that timer runs in the server process, and the expectation is that nothing changes.
+      await Bun.sleep(3000);
+      const stillDown = await fleet.state();
+      expect(offlineNodes(stillDown)).toEqual([fleet.ids[victim]]);
+      expect(connectedNodes(stillDown)).toEqual(others);
+
+      rmSync(dropFile);
+      const reconnectFrameStart = frames.length;
+      const back = await until("the dropped node to reconnect", async () => {
+        const now = await fleet.state();
+        return now.nodes[fleet.ids[victim]].connected && now;
+      });
+      expect(offlineNodes(back)).toEqual([]);
+      expect(connectedNodes(back)).toEqual(fleet.ids);
+      await until("reconnected state tick", async () =>
+        frames.slice(reconnectFrameStart).some(
+          (frame) => frame.type === "tick" && frame.payload.nodes[fleet.ids[victim]]?.connected === true
+        )
+      );
+    } finally {
+      socket.close();
+    }
   },
   TEST_TIMEOUT_MS
 );
