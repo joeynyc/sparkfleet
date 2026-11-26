@@ -22,7 +22,7 @@ import { readCapped, runSsh, sshCommandArgs } from "./ssh";
 import { isConfiguredNode } from "./targets";
 
 const AGENT_SOURCE = new URL("./agent.py", import.meta.url);
-const TICK_MS = 1000;
+const TICK_MS = 250;
 const RECONNECT_DELAY_MS = 2500;
 const HOST_PING_INTERVAL_MS = 8000;
 const MAX_CONCURRENT_EXECS_PER_NODE = 4;
@@ -133,7 +133,7 @@ export class FleetCollector {
     private localHost: LocalHostSnapshot
   ) {}
 
-  /** Connects to each configured node and starts emitting one tick per second. */
+  /** Connects to each configured node and starts emitting periodic ticks. */
   static async start(onTick: (tick: FleetTick) => void): Promise<FleetCollector> {
     const collector = new FleetCollector(
       onTick,
